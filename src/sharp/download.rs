@@ -26,6 +26,8 @@ pub(super) fn ensure_model_available() -> Result<PathBuf, SharpError> {
 
     if model_path.exists() {
         // Validate cached file is not truncated or empty.
+        // ONNX models >2GB use external data: sharp.onnx (structure) + sharp.onnx.data (weights).
+        // Count both files when checking the minimum size.
         let meta = fs::metadata(&model_path).map_err(|e| {
             SharpError::Download(format!(
                 "failed to stat cached model '{}': {}",
@@ -33,12 +35,23 @@ pub(super) fn ensure_model_available() -> Result<PathBuf, SharpError> {
                 e
             ))
         })?;
-        if meta.len() >= MIN_MODEL_SIZE {
+        let mut total_size = meta.len();
+
+        let data_path = {
+            let mut p = model_path.as_os_str().to_os_string();
+            p.push(".data");
+            PathBuf::from(p)
+        };
+        if let Ok(data_meta) = fs::metadata(&data_path) {
+            total_size += data_meta.len();
+        }
+
+        if total_size >= MIN_MODEL_SIZE {
             return Ok(model_path);
         }
         eprintln!(
             "Cached model is too small ({} bytes), re-downloading...",
-            meta.len()
+            total_size
         );
         let _ = fs::remove_file(&model_path);
     }

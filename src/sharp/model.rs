@@ -21,14 +21,36 @@ pub struct SharpOutputs {
 }
 
 /// Creates an ONNX Runtime session for the SHARP model.
+///
+/// Supports both self-contained ONNX files and models with external data
+/// (e.g. `sharp.onnx` + `sharp.onnx.data` for models exceeding protobuf 2GB).
 pub fn create_session(model_path: &Path) -> Result<Session, SharpError> {
     let mut builder = Session::builder().map_err(to_model_error)?;
 
-    #[cfg(target_os = "macos")]
-    {
+    // Check for external data companion file (model.onnx.data).
+    let has_external_data = {
+        let mut p = model_path.as_os_str().to_os_string();
+        p.push(".data");
+        std::path::PathBuf::from(p).exists()
+    };
+
+    // CoreML EP and graph optimization both try to read tensor initializers
+    // during session creation. When external data is present, ORT's
+    // Initializer requires the model path to resolve data file references,
+    // but certain code paths (CoreML partitioning, optimizer passes) don't
+    // propagate the path correctly — causing "model_path must not be empty".
+    // Disable both when external data is detected.
+    if has_external_data {
         builder = builder
-            .with_execution_providers([ort::ep::CoreML::default().build()])
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Disable)
             .map_err(to_model_error)?;
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder
+                .with_execution_providers([ort::ep::CoreML::default().build()])
+                .map_err(to_model_error)?;
+        }
     }
 
     builder.commit_from_file(model_path).map_err(to_model_error)
