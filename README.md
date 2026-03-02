@@ -147,6 +147,8 @@ tortuise ramen.ply
 
 The script auto-detects the scene format and handles both legacy (compressed PLY) and modern (SOG) SuperSplat scenes. No Node.js required — conversion is pure Python.
 
+> **Note:** `supersplat-dl.sh` is provided for personal, educational, and interoperability purposes. It converts SuperSplat's proprietary formats to standard PLY — the same data access pattern used by SuperSplat's own [MIT-licensed viewer](https://github.com/playcanvas/supersplat-viewer). Downloaded content remains the intellectual property of its creator. Please respect content creators' rights and provide attribution.
+
 **Requirements:** Python 3.8+, curl. For SOG scenes (most scenes uploaded after mid-2025), you also need Pillow and numpy:
 
 ```bash

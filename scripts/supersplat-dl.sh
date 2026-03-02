@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# DISCLAIMER: This tool is provided for personal, educational, and interoperability
+# purposes. It converts SuperSplat's proprietary formats to standard PLY — the same
+# data access pattern used by SuperSplat's own MIT-licensed viewer. Users are solely
+# responsible for ensuring their use complies with applicable terms of service and
+# copyright law. Downloaded content remains the intellectual property of its creator.
+# Respect content creators' rights and provide attribution.
 # SPDX-License-Identifier: MIT
 # supersplat-dl — Download and convert SuperSplat scenes to standard PLY
 # Usage: supersplat-dl.sh <url-or-id> [output.ply]
