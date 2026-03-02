@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, Parser, Subcommand};
 use crossterm::{
     cursor,
     event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
@@ -11,6 +11,8 @@ use std::time::Instant;
 
 mod camera;
 mod demo;
+#[cfg(feature = "sharp")]
+mod export;
 mod input;
 mod math;
 mod parser;
@@ -39,6 +41,8 @@ const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
     about = "Terminal-native 3D Gaussian Splatting viewer"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
     /// Path to a .ply or .splat scene file
     input: Option<PathBuf>,
     #[cfg(feature = "metal")]
@@ -60,6 +64,18 @@ struct Cli {
         help = "Supersampling factor"
     )]
     supersample: u32,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Convert a supported image into SHARP-generated .ply Gaussian splats
+    Convert {
+        /// Input image path (.jpg, .jpeg, .png, .webp)
+        input: PathBuf,
+        /// Output .ply path (defaults to input path with .ply extension)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn find_luigi_ply() -> Option<PathBuf> {
@@ -131,6 +147,32 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
 fn main() -> AppResult<()> {
     install_panic_hook();
     let cli = Cli::parse();
+
+    #[cfg(feature = "sharp")]
+    if let Some(Commands::Convert { input, output }) = &cli.command {
+        eprintln!("Reconstructing 3D scene from image...");
+        let splats = sharp::reconstruct_from_image(input)?;
+        let output_path = output.clone().unwrap_or_else(|| {
+            let mut out = input.clone();
+            out.set_extension("ply");
+            out
+        });
+        export::ply::save_ply(&splats, &output_path)?;
+        println!(
+            "Converted '{}' -> '{}' ({} splats)",
+            input.display(),
+            output_path.display(),
+            splats.len()
+        );
+        return Ok(());
+    }
+    #[cfg(not(feature = "sharp"))]
+    if matches!(cli.command, Some(Commands::Convert { .. })) {
+        return Err(
+            "The 'convert' subcommand requires the 'sharp' feature. Rebuild with: cargo install tortuise --features sharp"
+                .into(),
+        );
+    }
 
     if cli.input.is_none() && !cli.demo {
         Cli::command().print_help()?;
