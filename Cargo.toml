@@ -16,15 +16,23 @@ exclude = ["scenes/bonsai.splat", "scenes/luigi.ply", "assets/*", "scripts/*"]
 [features]
 default = []
 metal = ["dep:metal", "dep:objc"]
+sharp = ["dep:ort", "dep:ndarray", "dep:image", "dep:ureq"]
 
 [dependencies]
 crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
 rand = "0.9"
 rayon = "1.10"
+ndarray = { version = "0.17", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp"] }
+ureq = { version = "3", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.29", optional = true }
 objc = { version = "0.2", optional = true }
+ort = { version = "2.0.0-rc.11", optional = true, features = ["ndarray", "coreml"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+ort = { version = "2.0.0-rc.11", optional = true, features = ["ndarray"] }
 
 [profile.release]
 opt-level = 3

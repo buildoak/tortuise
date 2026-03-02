@@ -15,6 +15,8 @@ mod input;
 mod math;
 mod parser;
 mod render;
+#[cfg(feature = "sharp")]
+mod sharp;
 mod sort;
 mod splat;
 mod terminal_setup;
@@ -26,6 +28,9 @@ use render::{AppState, Backend, CameraMode, RenderMode, RenderState};
 use terminal_setup::{cleanup_terminal, install_panic_hook};
 
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+#[cfg(feature = "sharp")]
+const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -106,6 +111,15 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
     match ext.as_str() {
         "ply" => parser::ply::load_ply_file(path_str),
         "splat" => parser::dot_splat::load_splat_file(path_str),
+        #[cfg(feature = "sharp")]
+        ext if IMAGE_EXTENSIONS.contains(&ext) => {
+            eprintln!("Reconstructing 3D scene from image...");
+            sharp::reconstruct_from_image(path).map_err(|e| e.into())
+        }
+        #[cfg(not(feature = "sharp"))]
+        ext if ["jpg", "jpeg", "png", "webp"].contains(&ext) => {
+            Err("Image input requires the 'sharp' feature. Rebuild with: cargo install tortuise --features sharp".into())
+        }
         _ => Err(format!(
             "Unsupported input '{}'. Use a .ply, .splat, or --demo",
             path.display()
