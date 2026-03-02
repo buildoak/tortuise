@@ -68,9 +68,10 @@ pub fn run_inference(
 }
 
 fn extract_vec3_output(outputs: &SessionOutputs, name: &str) -> Result<Vec<[f32; 3]>, SharpError> {
-    let view = outputs[name]
-        .try_extract_array::<f32>()
-        .map_err(to_model_error)?;
+    let value = outputs
+        .get(name)
+        .ok_or_else(|| SharpError::Model(format!("missing output tensor '{name}'")))?;
+    let view = value.try_extract_array::<f32>().map_err(to_model_error)?;
     let shape = view.shape();
 
     if shape.len() != 3 || shape[0] != 1 || shape[2] != 3 {
@@ -88,9 +89,10 @@ fn extract_vec3_output(outputs: &SessionOutputs, name: &str) -> Result<Vec<[f32;
 }
 
 fn extract_vec4_output(outputs: &SessionOutputs, name: &str) -> Result<Vec<[f32; 4]>, SharpError> {
-    let view = outputs[name]
-        .try_extract_array::<f32>()
-        .map_err(to_model_error)?;
+    let value = outputs
+        .get(name)
+        .ok_or_else(|| SharpError::Model(format!("missing output tensor '{name}'")))?;
+    let view = value.try_extract_array::<f32>().map_err(to_model_error)?;
     let shape = view.shape();
 
     if shape.len() != 3 || shape[0] != 1 || shape[2] != 4 {
@@ -108,9 +110,10 @@ fn extract_vec4_output(outputs: &SessionOutputs, name: &str) -> Result<Vec<[f32;
 }
 
 fn extract_scalar_output(outputs: &SessionOutputs, name: &str) -> Result<Vec<f32>, SharpError> {
-    let view = outputs[name]
-        .try_extract_array::<f32>()
-        .map_err(to_model_error)?;
+    let value = outputs
+        .get(name)
+        .ok_or_else(|| SharpError::Model(format!("missing output tensor '{name}'")))?;
+    let view = value.try_extract_array::<f32>().map_err(to_model_error)?;
     let shape = view.shape();
 
     if shape.len() != 2 || shape[0] != 1 {

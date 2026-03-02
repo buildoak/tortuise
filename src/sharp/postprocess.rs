@@ -9,12 +9,17 @@ use super::model::SharpOutputs;
 /// SHARP emits colors in linear RGB; tortuise stores colors as sRGB bytes.
 /// We apply an approximate sRGB gamma curve (`x^(1/2.2)`) before quantization.
 fn linear_to_srgb_u8(channel: f32) -> u8 {
-    clamp_u8(channel.powf(1.0 / 2.2) * 255.0)
+    clamp_u8(channel.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0)
 }
 
 /// Converts SHARP inference outputs into tortuise splats.
 pub fn extract_splats(outputs: &SharpOutputs) -> Result<Vec<Splat>, SharpError> {
     let n = outputs.positions.len();
+    if n == 0 {
+        return Err(SharpError::PostProcess(
+            "SHARP produced zero Gaussians — check the input image".to_string(),
+        ));
+    }
     if outputs.scales.len() != n
         || outputs.rotations.len() != n
         || outputs.colors.len() != n

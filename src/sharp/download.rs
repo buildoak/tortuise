@@ -8,6 +8,10 @@ const MODEL_URL: &str = "https://huggingface.co/apple/Sharp/resolve/main/sharp.o
 const MODEL_DIR: &str = ".tortuise/models";
 const MODEL_FILENAME: &str = "sharp.onnx";
 
+/// Minimum plausible model file size (10 MB). Anything smaller is almost
+/// certainly a truncated download or placeholder.
+const MIN_MODEL_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Ensures the SHARP ONNX model is present in the local cache directory.
 pub(super) fn ensure_model_available() -> Result<PathBuf, SharpError> {
     #[cfg(windows)]
@@ -21,7 +25,22 @@ pub(super) fn ensure_model_available() -> Result<PathBuf, SharpError> {
     let model_path = PathBuf::from(home).join(MODEL_DIR).join(MODEL_FILENAME);
 
     if model_path.exists() {
-        return Ok(model_path);
+        // Validate cached file is not truncated or empty.
+        let meta = fs::metadata(&model_path).map_err(|e| {
+            SharpError::Download(format!(
+                "failed to stat cached model '{}': {}",
+                model_path.display(),
+                e
+            ))
+        })?;
+        if meta.len() >= MIN_MODEL_SIZE {
+            return Ok(model_path);
+        }
+        eprintln!(
+            "Cached model is too small ({} bytes), re-downloading...",
+            meta.len()
+        );
+        let _ = fs::remove_file(&model_path);
     }
 
     download_model(&model_path)?;
@@ -69,54 +88,83 @@ fn download_model(dest: &Path) -> Result<(), SharpError> {
     let mut buffer = [0_u8; 8 * 1024];
     let mut downloaded: u64 = 0;
 
-    loop {
-        let read = reader.read(&mut buffer).map_err(|e| {
-            SharpError::Download(format!(
-                "failed reading model download stream from {}: {}",
-                MODEL_URL, e
-            ))
-        })?;
+    let write_result: Result<(), SharpError> = (|| {
+        loop {
+            let read = reader.read(&mut buffer).map_err(|e| {
+                SharpError::Download(format!(
+                    "failed reading model download stream from {}: {}",
+                    MODEL_URL, e
+                ))
+            })?;
 
-        if read == 0 {
-            break;
+            if read == 0 {
+                break;
+            }
+
+            file.write_all(&buffer[..read]).map_err(|e| {
+                SharpError::Download(format!(
+                    "failed writing to temporary model file '{}': {}",
+                    tmp_path.display(),
+                    e
+                ))
+            })?;
+
+            downloaded += read as u64;
+            match content_length {
+                Some(total) => {
+                    eprint!(
+                        "\rDownloading SHARP model... {:.1} MB / {:.1} MB",
+                        downloaded as f64 / (1024.0 * 1024.0),
+                        total as f64 / (1024.0 * 1024.0)
+                    );
+                }
+                None => {
+                    eprint!(
+                        "\rDownloading SHARP model... {:.1} MB / unknown",
+                        downloaded as f64 / (1024.0 * 1024.0)
+                    );
+                }
+            }
         }
+        eprintln!();
 
-        file.write_all(&buffer[..read]).map_err(|e| {
+        file.flush().map_err(|e| {
             SharpError::Download(format!(
-                "failed writing to temporary model file '{}': {}",
+                "failed flushing temporary model file '{}': {}",
                 tmp_path.display(),
                 e
             ))
         })?;
 
-        downloaded += read as u64;
-        match content_length {
-            Some(total) => {
-                eprint!(
-                    "\rDownloading SHARP model... {:.1} MB / {:.1} MB",
-                    downloaded as f64 / (1024.0 * 1024.0),
-                    total as f64 / (1024.0 * 1024.0)
-                );
-            }
-            None => {
-                eprint!(
-                    "\rDownloading SHARP model... {:.1} MB / unknown",
-                    downloaded as f64 / (1024.0 * 1024.0)
-                );
+        // Verify download completeness when Content-Length was provided.
+        if let Some(expected) = content_length {
+            if downloaded != expected {
+                return Err(SharpError::Download(format!(
+                    "incomplete download: expected {} bytes, got {}",
+                    expected, downloaded
+                )));
             }
         }
-    }
-    eprintln!();
 
-    file.flush().map_err(|e| {
-        SharpError::Download(format!(
-            "failed flushing temporary model file '{}': {}",
-            tmp_path.display(),
-            e
-        ))
-    })?;
+        // Sanity-check minimum size regardless of Content-Length.
+        if downloaded < MIN_MODEL_SIZE {
+            return Err(SharpError::Download(format!(
+                "downloaded file is suspiciously small ({} bytes)",
+                downloaded
+            )));
+        }
+
+        Ok(())
+    })();
+
+    // Clean up temp file on any error.
+    if write_result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        return write_result;
+    }
 
     fs::rename(&tmp_path, dest).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
         SharpError::Download(format!(
             "failed to finalize model at '{}': {}",
             dest.display(),
