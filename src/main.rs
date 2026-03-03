@@ -33,9 +33,6 @@ use terminal_setup::{cleanup_terminal, install_panic_hook};
 
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-#[cfg(feature = "sharp")]
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
-
 #[derive(Debug, Parser)]
 #[command(
     name = "tortuise",
@@ -129,19 +126,12 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
     match ext.as_str() {
         "ply" => parser::ply::load_ply_file(path_str),
         "splat" => parser::dot_splat::load_splat_file(path_str),
-        #[cfg(feature = "sharp")]
-        ext if IMAGE_EXTENSIONS.contains(&ext) => {
-            let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
-            let result = sharp::reconstruct_from_image(path).map_err(|e| -> Box<dyn std::error::Error> { e.into() });
-            match &result {
-                Ok(splats) => sp.finish(&format!("Reconstructed {} Gaussians", splats.len())),
-                Err(_) => drop(sp),
-            }
-            result
-        }
-        #[cfg(not(feature = "sharp"))]
-        ext if ["jpg", "jpeg", "png", "webp"].contains(&ext) => {
-            Err("Image input requires the 'sharp' feature. Rebuild with: cargo install tortuise --features sharp".into())
+        "jpg" | "jpeg" | "png" | "webp" => {
+            let filename = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+            eprintln!("Image files require conversion to 3DGS first.\n");
+            eprintln!("  tortuise convert {} -o scene.ply", filename);
+            eprintln!("  tortuise scene.ply");
+            std::process::exit(1);
         }
         _ => Err(format!(
             "Unsupported input '{}'. Use a .ply, .splat, or --demo",
@@ -157,6 +147,10 @@ fn main() -> AppResult<()> {
 
     #[cfg(feature = "sharp")]
     if let Some(Commands::Convert { input, output }) = &cli.command {
+        // Phase 1: Ensure model is downloaded (shows its own progress UX).
+        sharp::ensure_model_downloaded()?;
+
+        // Phase 2: Inference with Matrix rain animation.
         let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
         let splats = sharp::reconstruct_from_image(input)?;
         sp.finish(&format!("Reconstructed {} Gaussians", splats.len()));
