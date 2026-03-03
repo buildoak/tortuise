@@ -187,6 +187,10 @@ pub struct AppState {
     pub orbit_radius: f32,
     pub orbit_height: f32,
     pub orbit_target: Vec3,
+    /// Centroid of the loaded splat cloud (used for camera reset).
+    pub scene_center: Vec3,
+    /// Initial camera distance from scene_center (used for camera reset).
+    pub initial_cam_distance: f32,
     pub supersample_factor: u32,
     pub render_mode: RenderMode,
     pub backend: Backend,

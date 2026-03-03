@@ -119,3 +119,37 @@ pub fn evaluate_2d_gaussian(
     }
     (-0.5 * q).exp()
 }
+
+/// Bounding information for a set of splats.
+pub struct SceneBounds {
+    pub centroid: Vec3,
+    /// Maximum distance from the centroid to any splat.
+    pub extent: f32,
+}
+
+/// Compute the centroid and extent of a splat cloud.
+///
+/// Returns `None` for an empty slice.
+pub fn compute_scene_bounds(splats: &[Splat]) -> Option<SceneBounds> {
+    if splats.is_empty() {
+        return None;
+    }
+
+    let n = splats.len() as f32;
+    let mut sum = Vec3::ZERO;
+    for s in splats {
+        sum += s.position;
+    }
+    let centroid = sum * (1.0 / n);
+
+    let mut max_dist_sq: f32 = 0.0;
+    for s in splats {
+        let d = s.position - centroid;
+        max_dist_sq = max_dist_sq.max(d.length_squared());
+    }
+
+    Some(SceneBounds {
+        centroid,
+        extent: max_dist_sq.sqrt(),
+    })
+}

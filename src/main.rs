@@ -339,8 +339,21 @@ fn main() -> AppResult<()> {
     let width = cols.max(1) as usize;
     let height = rows.max(1) as usize * 2;
 
-    let mut camera = Camera::new(Vec3::new(0.0, 0.0, 5.0), -std::f32::consts::FRAC_PI_2, 0.0);
-    camera::look_at_target(&mut camera, Vec3::ZERO);
+    // Position camera to frame the loaded scene: place it at centroid + offset
+    // along +Z, looking at the centroid. Falls back to default if scene is empty.
+    let bounds = splat::compute_scene_bounds(&splats);
+    let (scene_center, scene_radius) = match &bounds {
+        Some(b) => (b.centroid, b.extent.max(0.1)),
+        None => (Vec3::ZERO, 2.5),
+    };
+    let cam_distance = scene_radius * 2.5;
+    let cam_start = Vec3::new(
+        scene_center.x,
+        scene_center.y,
+        scene_center.z + cam_distance,
+    );
+    let mut camera = Camera::new(cam_start, -std::f32::consts::FRAC_PI_2, 0.0);
+    camera::look_at_target(&mut camera, scene_center);
 
     #[cfg(feature = "metal")]
     let mut metal_backend = if backend == Backend::Metal {
@@ -384,9 +397,11 @@ fn main() -> AppResult<()> {
         fps: 0.0,
         visible_splat_count: 0,
         orbit_angle: 0.0,
-        orbit_radius: 5.0,
+        orbit_radius: cam_distance,
         orbit_height: 0.0,
-        orbit_target: Vec3::ZERO,
+        orbit_target: scene_center,
+        scene_center,
+        initial_cam_distance: cam_distance,
         supersample_factor: cli.supersample.max(1),
         render_mode: RenderMode::Halfblock,
         backend,

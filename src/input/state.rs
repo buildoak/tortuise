@@ -73,6 +73,8 @@ mod tests {
             orbit_radius: 5.0,
             orbit_height: 0.0,
             orbit_target: Vec3::ZERO,
+            scene_center: Vec3::ZERO,
+            initial_cam_distance: 5.0,
             supersample_factor: 1,
             render_mode: RenderMode::Halfblock,
             backend: Backend::Cpu,

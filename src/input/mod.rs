@@ -36,10 +36,10 @@ pub fn drain_input_events(
 
 /// Transition from Free camera to Orbit mode.
 ///
-/// Always orbits around the origin — WASD navigation does not shift the
-/// orbit center. Matches the pre-modal-camera behavior.
+/// Orbits around the loaded scene's centroid so that any scene is framed
+/// correctly regardless of where its splats sit in world space.
 fn transition_to_orbit(app_state: &mut AppState) {
-    let target = Vec3::ZERO;
+    let target = app_state.scene_center;
     app_state.orbit_target = target;
 
     let dx = app_state.camera.position.x - target.x;
@@ -146,11 +146,14 @@ pub fn handle_input_event(app_state: &mut AppState, event: Event) -> AppResult<(
                         app_state.render_mode = app_state.render_mode.next();
                     }
                     'z' => {
-                        camera::reset(&mut app_state.camera, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
+                        let center = app_state.scene_center;
+                        let dist = app_state.initial_cam_distance;
+                        let start = Vec3::new(center.x, center.y, center.z + dist);
+                        camera::reset(&mut app_state.camera, start, center);
                         app_state.camera_mode = CameraMode::Free;
-                        app_state.orbit_target = Vec3::ZERO;
+                        app_state.orbit_target = center;
                         app_state.orbit_angle = 0.0;
-                        app_state.orbit_radius = 5.0;
+                        app_state.orbit_radius = dist;
                         app_state.orbit_height = 0.0;
                     }
                     _ => {}
@@ -202,6 +205,8 @@ mod tests {
             orbit_radius: 5.0,
             orbit_height: 0.0,
             orbit_target: Vec3::ZERO,
+            scene_center: Vec3::ZERO,
+            initial_cam_distance: 5.0,
             supersample_factor: 1,
             render_mode: RenderMode::Halfblock,
             backend: Backend::Cpu,
