@@ -20,6 +20,8 @@ mod render;
 #[cfg(feature = "sharp")]
 mod sharp;
 mod sort;
+#[cfg(feature = "sharp")]
+mod spinner;
 mod splat;
 mod terminal_setup;
 
@@ -129,8 +131,13 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
         "splat" => parser::dot_splat::load_splat_file(path_str),
         #[cfg(feature = "sharp")]
         ext if IMAGE_EXTENSIONS.contains(&ext) => {
-            eprintln!("Reconstructing 3D scene from image...");
-            sharp::reconstruct_from_image(path).map_err(|e| e.into())
+            let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
+            let result = sharp::reconstruct_from_image(path).map_err(|e| -> Box<dyn std::error::Error> { e.into() });
+            match &result {
+                Ok(splats) => sp.finish(&format!("Reconstructed {} Gaussians", splats.len())),
+                Err(_) => drop(sp),
+            }
+            result
         }
         #[cfg(not(feature = "sharp"))]
         ext if ["jpg", "jpeg", "png", "webp"].contains(&ext) => {
@@ -150,20 +157,23 @@ fn main() -> AppResult<()> {
 
     #[cfg(feature = "sharp")]
     if let Some(Commands::Convert { input, output }) = &cli.command {
-        eprintln!("Reconstructing 3D scene from image...");
+        let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
         let splats = sharp::reconstruct_from_image(input)?;
+        sp.finish(&format!("Reconstructed {} Gaussians", splats.len()));
+
         let output_path = output.clone().unwrap_or_else(|| {
             let mut out = input.clone();
             out.set_extension("ply");
             out
         });
+
+        let sp = spinner::Spinner::start(&format!("Saving to {}...", output_path.display()));
         export::ply::save_ply(&splats, &output_path)?;
-        println!(
-            "Converted '{}' -> '{}' ({} splats)",
-            input.display(),
-            output_path.display(),
-            splats.len()
-        );
+        sp.finish(&format!(
+            "Saved {} splats to '{}'",
+            splats.len(),
+            output_path.display()
+        ));
         return Ok(());
     }
     #[cfg(not(feature = "sharp"))]

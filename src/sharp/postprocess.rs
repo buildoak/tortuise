@@ -70,19 +70,21 @@ pub fn extract_splats(outputs: &SharpOutputs, metadata: &ImageMetadata) -> Resul
         };
         // Apple: new_pos = pos @ T_linear^T + offset
         // (pos @ T_linear^T)[j] = sum_i pos[i] * T_linear[j][i]
+        // SHARP uses OpenCV conventions (y-down, z-forward).
+        // tortuise's renderer uses y-up, z-backward. Flip y and z after unprojection.
         let new_position = Vec3 {
             x: position.x * t_linear[0][0]
                 + position.y * t_linear[0][1]
                 + position.z * t_linear[0][2]
                 + t_offset[0],
-            y: position.x * t_linear[1][0]
+            y: -(position.x * t_linear[1][0]
                 + position.y * t_linear[1][1]
                 + position.z * t_linear[1][2]
-                + t_offset[1],
-            z: position.x * t_linear[2][0]
+                + t_offset[1]),
+            z: -(position.x * t_linear[2][0]
                 + position.y * t_linear[2][1]
                 + position.z * t_linear[2][2]
-                + t_offset[2],
+                + t_offset[2]),
         };
 
         let rotation_matrix = quat_to_rotation_matrix(rotation);
@@ -95,7 +97,14 @@ pub fn extract_splats(outputs: &SharpOutputs, metadata: &ImageMetadata) -> Resul
             mat3_mul(rotation_matrix, scale_diag),
             mat3_transpose(rotation_matrix),
         );
-        let covariance_new = mat3_mul(mat3_mul(t_linear, covariance), mat3_transpose(t_linear));
+        // Apply the same y/z flip to the covariance transform.
+        // flip = diag(1, -1, -1) converts OpenCV → tortuise coordinate system.
+        let flip_t = [
+            [t_linear[0][0], t_linear[0][1], t_linear[0][2]],
+            [-t_linear[1][0], -t_linear[1][1], -t_linear[1][2]],
+            [-t_linear[2][0], -t_linear[2][1], -t_linear[2][2]],
+        ];
+        let covariance_new = mat3_mul(mat3_mul(flip_t, covariance), mat3_transpose(flip_t));
         let (eigvecs, eigvals) = symmetric_eigen3(covariance_new);
 
         let new_rotation = quat_normalize(quaternion_from_rotation_matrix(eigvecs));
