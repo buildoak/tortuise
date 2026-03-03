@@ -181,6 +181,25 @@ fn main() -> AppResult<()> {
 
             match sips_result {
                 Ok(out) if out.status.success() => {
+                    // HEIC files store landscape pixel data with EXIF orientation
+                    // metadata (e.g. Orientation 6 = 90° CW for portrait photos).
+                    // The format conversion above may preserve this tag without
+                    // rotating the actual pixels.  Since the `image` crate does
+                    // NOT auto-apply EXIF orientation from PNGs, we use `sips -r 0`
+                    // to bake any pending orientation into the pixel data (a 0°
+                    // rotation that forces sips to apply the EXIF transform).
+                    let bake = std::process::Command::new("sips")
+                        .args(["-r", "0"])
+                        .arg(&tmp_path)
+                        .output();
+                    if let Ok(b) = &bake {
+                        if !b.status.success() {
+                            eprintln!(
+                                "sips orientation bake warning: {}",
+                                String::from_utf8_lossy(&b.stderr)
+                            );
+                        }
+                    }
                     heic_tmp = Some(tmp_path);
                 }
                 Ok(out) => {
