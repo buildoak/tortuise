@@ -69,7 +69,7 @@ struct Cli {
 enum Commands {
     /// Convert a supported image into SHARP-generated .ply Gaussian splats
     Convert {
-        /// Input image path (.jpg, .jpeg, .png, .webp)
+        /// Input image path (.jpg, .jpeg, .png, .webp, .heic)
         input: PathBuf,
         /// Output .ply path (defaults to input path with .ply extension)
         #[arg(short, long)]
@@ -126,7 +126,7 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
     match ext.as_str() {
         "ply" => parser::ply::load_ply_file(path_str),
         "splat" => parser::dot_splat::load_splat_file(path_str),
-        "jpg" | "jpeg" | "png" | "webp" => {
+        "jpg" | "jpeg" | "png" | "webp" | "heic" => {
             let filename = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
             eprintln!("Image files require conversion to 3DGS first.\n");
             eprintln!("  tortuise convert {} -o scene.ply", filename);
@@ -147,28 +147,93 @@ fn main() -> AppResult<()> {
 
     #[cfg(feature = "sharp")]
     if let Some(Commands::Convert { input, output }) = &cli.command {
-        // Phase 1: Ensure model is downloaded (shows its own progress UX).
-        sharp::ensure_model_downloaded()?;
+        // If the input is HEIC, convert to PNG via macOS sips first.
+        let heic_tmp: Option<PathBuf>;
+        let effective_input: &std::path::Path;
 
-        // Phase 2: Inference with Matrix rain animation.
-        let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
-        let splats = sharp::reconstruct_from_image(input)?;
-        sp.finish(&format!("Reconstructed {} Gaussians", splats.len()));
+        let ext = input
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
 
-        let output_path = output.clone().unwrap_or_else(|| {
-            let mut out = input.clone();
-            out.set_extension("ply");
-            out
-        });
+        if ext == "heic" {
+            let stem = input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("image");
+            let tmp_path =
+                std::env::temp_dir().join(format!("tortuise_heic_{}.png", stem));
 
-        let sp = spinner::Spinner::start(&format!("Saving to {}...", output_path.display()));
-        export::ply::save_ply(&splats, &output_path)?;
-        sp.finish(&format!(
-            "Saved {} splats to '{}'",
-            splats.len(),
-            output_path.display()
-        ));
-        return Ok(());
+            let sips_result = std::process::Command::new("sips")
+                .args(["--setProperty", "format", "png"])
+                .arg(input)
+                .arg("--out")
+                .arg(&tmp_path)
+                .output();
+
+            match sips_result {
+                Ok(out) if out.status.success() => {
+                    heic_tmp = Some(tmp_path);
+                }
+                Ok(out) => {
+                    eprintln!(
+                        "sips failed to convert HEIC: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "HEIC conversion requires macOS 'sips' utility \
+                         (not available on this platform). \
+                         Convert your image to PNG or JPEG first."
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("Failed to run sips: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            effective_input = heic_tmp.as_deref().unwrap();
+        } else {
+            heic_tmp = None;
+            effective_input = input;
+        }
+
+        // Wrap the rest in a closure so we can clean up the temp file on any exit path.
+        let result = (|| -> AppResult<()> {
+            // Phase 1: Ensure model is downloaded (shows its own progress UX).
+            sharp::ensure_model_downloaded()?;
+
+            // Phase 2: Inference with Matrix rain animation.
+            let sp = spinner::Spinner::start("Reconstructing 3D scene from image...");
+            let splats = sharp::reconstruct_from_image(effective_input)?;
+            sp.finish(&format!("Reconstructed {} Gaussians", splats.len()));
+
+            let output_path = output.clone().unwrap_or_else(|| {
+                let mut out = input.clone();
+                out.set_extension("ply");
+                out
+            });
+
+            let sp = spinner::Spinner::start(&format!("Saving to {}...", output_path.display()));
+            export::ply::save_ply(&splats, &output_path)?;
+            sp.finish(&format!(
+                "Saved {} splats to '{}'",
+                splats.len(),
+                output_path.display()
+            ));
+            Ok(())
+        })();
+
+        // Clean up temp HEIC-converted file regardless of success/failure.
+        if let Some(ref tmp) = heic_tmp {
+            let _ = std::fs::remove_file(tmp);
+        }
+
+        return result.map_err(Into::into);
     }
     #[cfg(not(feature = "sharp"))]
     if matches!(cli.command, Some(Commands::Convert { .. })) {
