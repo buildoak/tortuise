@@ -50,6 +50,8 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(long, help = "Force Metal GPU rendering", conflicts_with = "cpu")]
     metal: bool,
+    #[arg(long, help = "Flip X axis")]
+    flip_x: bool,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -259,8 +261,11 @@ fn main() -> AppResult<()> {
     let backend = Backend::Cpu;
 
     let mut splats = load_splats_from_cli(&cli)?;
-    if cli.flip_y || cli.flip_z {
+    if cli.flip_x || cli.flip_y || cli.flip_z {
         for splat in &mut splats {
+            if cli.flip_x {
+                splat.position.x = -splat.position.x;
+            }
             if cli.flip_y {
                 splat.position.y = -splat.position.y;
             }
