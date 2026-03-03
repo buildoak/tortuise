@@ -181,6 +181,29 @@ fn main() -> AppResult<()> {
 
             match sips_result {
                 Ok(out) if out.status.success() => {
+                    // iPhone HEIC files typically use the Display P3 color space.
+                    // SHARP was trained on sRGB images, so feeding P3-gamut pixel
+                    // values produces degenerate output (near-zero positions,
+                    // uniform tiny scales → black screen).  Convert the pixel data
+                    // to sRGB before inference.
+                    let srgb_profile = "/System/Library/ColorSync/Profiles/sRGB Profile.icc";
+                    if std::path::Path::new(srgb_profile).exists() {
+                        let srgb = std::process::Command::new("sips")
+                            .args(["--matchTo", srgb_profile])
+                            .arg(&tmp_path)
+                            .arg("--out")
+                            .arg(&tmp_path)
+                            .output();
+                        if let Ok(s) = &srgb {
+                            if !s.status.success() {
+                                eprintln!(
+                                    "sips sRGB conversion warning: {}",
+                                    String::from_utf8_lossy(&s.stderr)
+                                );
+                            }
+                        }
+                    }
+
                     // HEIC files store landscape pixel data with EXIF orientation
                     // metadata (e.g. Orientation 6 = 90° CW for portrait photos).
                     // The format conversion above may preserve this tag without
