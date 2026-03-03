@@ -149,6 +149,11 @@ fn main() -> AppResult<()> {
 
     #[cfg(feature = "sharp")]
     if let Some(Commands::Convert { input, output }) = &cli.command {
+        if !input.exists() {
+            eprintln!("Error: file not found: {}", input.display());
+            std::process::exit(1);
+        }
+
         // If the input is HEIC, convert to PNG via macOS sips first.
         let heic_tmp: Option<PathBuf>;
         let effective_input: &std::path::Path;
