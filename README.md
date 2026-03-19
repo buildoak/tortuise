@@ -4,6 +4,7 @@ Gaussian splats viewer that works in your terminal. Yes, it's made of symbols!
 
 ![tortuise demo](https://raw.githubusercontent.com/buildoak/tortuise/main/assets/demo.webp)
 
+[![Terminal Trove - Tool of the Week](https://cdn.terminaltrove.com/media/badges/tool_of_the_week/svg/terminal_trove_tool_of_the_week_gold_transparent.svg)](https://terminaltrove.com/tortuise/)
 [![crates.io](https://img.shields.io/crates/v/tortuise.svg)](https://crates.io/crates/tortuise)
 [![CI](https://github.com/buildoak/tortuise/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/tortuise/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
