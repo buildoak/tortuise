@@ -7,6 +7,8 @@ use super::sort::div_ceil_u32;
 use super::types::TILE_SIZE;
 use super::MetalBackend;
 
+const MAX_SORT_KEY_ORIGINAL_INDEX: usize = (1 << 22) - 1;
+
 impl MetalBackend {
     pub fn render(
         &mut self,
@@ -32,6 +34,11 @@ impl MetalBackend {
 
             if splat_count > self.max_splats {
                 return Err("Too many splats for GPU buffers".into());
+            }
+            if splat_count > MAX_SORT_KEY_ORIGINAL_INDEX + 1 {
+                return Err(
+                    "Splat count exceeds 22-bit Metal sort key original_index encoding".into(),
+                );
             }
 
             let screen_width_u32 = u32::try_from(screen_width)?;

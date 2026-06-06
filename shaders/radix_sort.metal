@@ -1,13 +1,13 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// 8-bit radix over uint32 keys => 256 buckets, 4 LSD passes (bit offsets 0/8/16/24).
+// 8-bit radix over uint64_t keys => 256 buckets, 8 LSD passes.
 static constant uint kRadixBuckets = 256u;
 static constant uint kBlockSize = 256u;
 static constant uint kRadixMask = 0xFFu;
 
 kernel void radix_sort_histogram(
-    constant uint* keys [[buffer(0)]],
+    constant uint64_t* keys [[buffer(0)]],
     device uint* histograms [[buffer(1)]],
     device const uint& num_elements [[buffer(2)]],
     constant uint& bit_offset [[buffer(3)]],
@@ -33,8 +33,8 @@ kernel void radix_sort_histogram(
 
     // One thread processes one key, contributes to its radix bucket.
     if (gid < num_elements) {
-        uint key = keys[gid];
-        uint digit = (key >> bit_offset) & kRadixMask;
+        uint64_t key = keys[gid];
+        uint digit = uint((key >> bit_offset) & uint64_t(kRadixMask));
         atomic_fetch_add_explicit(&local_histogram[digit], 1u, memory_order_relaxed);
     }
 
@@ -48,9 +48,9 @@ kernel void radix_sort_histogram(
 }
 
 kernel void radix_sort_scatter(
-    constant uint* keys_in [[buffer(0)]],
+    constant uint64_t* keys_in [[buffer(0)]],
     constant uint* values_in [[buffer(1)]],
-    device uint* keys_out [[buffer(2)]],
+    device uint64_t* keys_out [[buffer(2)]],
     device uint* values_out [[buffer(3)]],
     constant uint* histograms [[buffer(4)]],
     device const uint& num_elements [[buffer(5)]],
@@ -69,9 +69,9 @@ kernel void radix_sort_scatter(
         return;
     }
 
-    uint key = keys_in[gid];
+    uint64_t key = keys_in[gid];
     uint value = values_in[gid];
-    uint digit = (key >> bit_offset) & kRadixMask;
+    uint digit = uint((key >> bit_offset) & uint64_t(kRadixMask));
 
     // LSD radix sort must be stable on every pass.  A per-bucket atomic rank
     // is not stable because atomic arrival order is not guaranteed to match
@@ -81,7 +81,7 @@ kernel void radix_sort_scatter(
     const uint block_start = block_id * kBlockSize;
     uint local_rank = 0u;
     for (uint i = block_start; i < gid; ++i) {
-        uint prior_digit = (keys_in[i] >> bit_offset) & kRadixMask;
+        uint prior_digit = uint((keys_in[i] >> bit_offset) & uint64_t(kRadixMask));
         if (prior_digit == digit) {
             local_rank += 1u;
         }

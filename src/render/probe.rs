@@ -2747,6 +2747,95 @@ mod tests {
         let _ = fs::remove_dir_all(out_dir);
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn probe_run_edge_bounds_overlap_count_matches_cpu_when_device_is_available() {
+        if metal::Device::system_default().is_none() {
+            eprintln!("Skipping Metal probe test: no system-default Metal device.");
+            return;
+        }
+
+        let out_dir = unique_temp_dir("probe_run_edge_bounds");
+        let splats = vec![probe_splat(
+            Vec3::new(0.014, 0.0, 0.0),
+            [255, 210, 40],
+            0.9,
+            0.18,
+        )];
+        let mut config = ProbeConfig::new(&out_dir);
+        config.width = 96;
+        config.height = 72;
+        config.case = ProbeCase::Loaded;
+        config.backend = ProbeBackendSelection::Both;
+        config.stage_telemetry = true;
+
+        let camera = config.camera.to_camera();
+        let (_, projected) =
+            render_cpu_frame_with_projection(&splats, &camera, config.width, config.height, true);
+        let projected = projected.expect("CPU projection should be retained");
+        let cpu_overlaps =
+            cpu_equivalent_total_tile_overlaps(&projected, config.width, config.height);
+        let truncating_overlaps =
+            truncating_total_tile_overlaps(&projected, config.width, config.height);
+        assert!(
+            cpu_overlaps > truncating_overlaps,
+            "synthetic edge-bound case must catch max-bound truncation"
+        );
+
+        let result = run_probe(&config, &splats).unwrap();
+        let telemetry = result.metal_frames[0]
+            .telemetry
+            .as_ref()
+            .expect("stage telemetry should be captured");
+
+        assert_eq!(telemetry.valid_count, projected.len() as u32);
+        assert_eq!(telemetry.actual_total_overlaps, cpu_overlaps);
+        assert_eq!(
+            result.diff_frames[0].metrics.classification,
+            ProbeDiffClassification::Pass
+        );
+        assert_eq!(result.diff_frames[0].metrics.max_abs, 0);
+
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[cfg(feature = "metal")]
+    fn cpu_equivalent_total_tile_overlaps(
+        projected_splats: &[ProjectedSplat],
+        width: usize,
+        height: usize,
+    ) -> u32 {
+        projected_splats
+            .iter()
+            .map(|splat| {
+                let telemetry = projected_splat_telemetry(splat, width, height);
+                let width_tiles = telemetry.tile_bounds.max_x - telemetry.tile_bounds.min_x + 1;
+                let height_tiles = telemetry.tile_bounds.max_y - telemetry.tile_bounds.min_y + 1;
+                (width_tiles * height_tiles) as u32
+            })
+            .sum()
+    }
+
+    #[cfg(feature = "metal")]
+    fn truncating_total_tile_overlaps(
+        projected_splats: &[ProjectedSplat],
+        width: usize,
+        height: usize,
+    ) -> u32 {
+        let max_x = width.saturating_sub(1) as f32;
+        let max_y = height.saturating_sub(1) as f32;
+        projected_splats
+            .iter()
+            .map(|splat| {
+                let min_x = (splat.screen_x - splat.radius_x).max(0.0) as usize / PROBE_TILE_SIZE;
+                let min_y = (splat.screen_y - splat.radius_y).max(0.0) as usize / PROBE_TILE_SIZE;
+                let max_x = (splat.screen_x + splat.radius_x).min(max_x) as usize / PROBE_TILE_SIZE;
+                let max_y = (splat.screen_y + splat.radius_y).min(max_y) as usize / PROBE_TILE_SIZE;
+                ((max_x - min_x + 1) * (max_y - min_y + 1)) as u32
+            })
+            .sum()
+    }
+
     fn unique_temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

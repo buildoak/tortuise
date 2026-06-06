@@ -1,4 +1,8 @@
-use std::{ffi::c_void, mem, time::Duration};
+use std::{
+    ffi::c_void,
+    mem,
+    time::{Duration, Instant},
+};
 
 use metal::{MTLSize, NSRange};
 
@@ -6,7 +10,7 @@ use crate::camera::Camera;
 
 use super::error::MetalRenderError;
 use super::pipeline::{read_shared_u32, set_bytes_u32, write_shared_struct};
-use super::sort::{dispatch_1d, div_ceil_u32};
+use super::sort::{dispatch_1d, div_ceil_u32, RADIX_SORT_BIT_OFFSETS};
 use super::sync::commit_and_wait_or_disable_gpu;
 use super::types::{
     GpuCameraData, TileConfig, RADIX_BUCKETS, SHADER_TILE_SIZE, THREADS_PER_GROUP_1D, TILE_SIZE,
@@ -14,6 +18,7 @@ use super::types::{
 use super::MetalBackend;
 
 const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+const METAL_STAGE_TIMING_ENV: &str = "TORTUISE_METAL_STAGE_TIMING";
 
 #[derive(Debug)]
 pub(super) struct RenderAttemptResult {
@@ -29,6 +34,7 @@ pub(super) fn run_single_render_attempt(
     screen_height: usize,
     splat_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
+    let stage_timing_enabled = metal_stage_timing_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
@@ -81,6 +87,7 @@ pub(super) fn run_single_render_attempt(
         .ok_or_else(|| MetalRenderError::Other("framebuffer clear size overflow".to_string()))?
         as u64;
 
+    let stage_a_encode_started = stage_timing_enabled.then(Instant::now);
     let stage_a = backend.command_queue.new_command_buffer();
 
     let blit = stage_a.new_blit_command_encoder();
@@ -151,12 +158,41 @@ pub(super) fn run_single_render_attempt(
     blit.end_encoding();
 
     backend.encode_prefix_scan_in_place(stage_a, &backend.tile_offsets, 0, num_tiles as u32)?;
-    commit_and_wait_or_disable_gpu(
+    let stage_a_encode_ms = stage_a_encode_started.map(|started| duration_ms(started.elapsed()));
+    let stage_a_wait_started = stage_timing_enabled.then(Instant::now);
+    let stage_a_result = commit_and_wait_or_disable_gpu(
         stage_a,
         "project_count_scan",
         GPU_WAIT_TIMEOUT,
         &mut backend.gpu_disabled,
-    )?;
+    );
+    if stage_timing_enabled {
+        let stage_a_wait_ms =
+            stage_a_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+        eprintln!(
+            concat!(
+                "tortuise_metal_stage_timing ",
+                "{{",
+                "\"stage\":\"project_count_scan\",",
+                "\"ok\":{},",
+                "\"encode_ms\":{:.6},",
+                "\"wait_ms\":{:.6},",
+                "\"splat_count\":{},",
+                "\"num_tiles\":{},",
+                "\"tile_count_x\":{},",
+                "\"tile_count_y\":{}",
+                "}}"
+            ),
+            stage_a_result.is_ok(),
+            stage_a_encode_ms.unwrap_or(0.0),
+            stage_a_wait_ms,
+            splat_count,
+            num_tiles,
+            tile_count_x,
+            tile_count_y
+        );
+    }
+    stage_a_result?;
 
     let total_overlaps = read_shared_u32(&backend.total_overlaps_buffer);
     let valid_count = read_shared_u32(&backend.valid_count_buffer);
@@ -169,16 +205,19 @@ pub(super) fn run_single_render_attempt(
     }
 
     let dispatch_overlaps = total_overlaps;
+    let mut sort_num_blocks = 0u32;
+    let mut histogram_count = 0u32;
 
     if dispatch_overlaps > 0 {
-        let sort_num_blocks = div_ceil_u32(dispatch_overlaps, THREADS_PER_GROUP_1D);
-        let histogram_count = sort_num_blocks
+        sort_num_blocks = div_ceil_u32(dispatch_overlaps, THREADS_PER_GROUP_1D);
+        histogram_count = sort_num_blocks
             .checked_mul(RADIX_BUCKETS)
             .ok_or_else(|| MetalRenderError::Other("histogram count overflow".to_string()))?;
         backend.ensure_histogram_capacity(histogram_count as usize)?;
         backend.ensure_block_sums_capacity_for_count(histogram_count)?;
     }
 
+    let stage_b_encode_started = stage_timing_enabled.then(Instant::now);
     let stage_b = backend.command_queue.new_command_buffer();
     let mut keys_in_a = true;
 
@@ -222,12 +261,49 @@ pub(super) fn run_single_render_attempt(
         encoder.end_encoding();
     }
 
-    commit_and_wait_or_disable_gpu(
+    let stage_b_encode_ms = stage_b_encode_started.map(|started| duration_ms(started.elapsed()));
+    let stage_b_wait_started = stage_timing_enabled.then(Instant::now);
+    let stage_b_result = commit_and_wait_or_disable_gpu(
         stage_b,
         "sort_rasterize",
         GPU_WAIT_TIMEOUT,
         &mut backend.gpu_disabled,
-    )?;
+    );
+    if stage_timing_enabled {
+        let stage_b_wait_ms =
+            stage_b_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+        eprintln!(
+            concat!(
+                "tortuise_metal_stage_timing ",
+                "{{",
+                "\"stage\":\"sort_rasterize\",",
+                "\"ok\":{},",
+                "\"encode_ms\":{:.6},",
+                "\"wait_ms\":{:.6},",
+                "\"splat_count\":{},",
+                "\"dispatch_overlaps\":{},",
+                "\"sort_capacity\":{},",
+                "\"sort_num_blocks\":{},",
+                "\"radix_histogram_count\":{},",
+                "\"radix_passes\":{}",
+                "}}"
+            ),
+            stage_b_result.is_ok(),
+            stage_b_encode_ms.unwrap_or(0.0),
+            stage_b_wait_ms,
+            splat_count,
+            dispatch_overlaps,
+            sort_capacity_u32,
+            sort_num_blocks,
+            histogram_count,
+            if dispatch_overlaps > 0 {
+                RADIX_SORT_BIT_OFFSETS.len()
+            } else {
+                0
+            }
+        );
+    }
+    stage_b_result?;
 
     let overflow_flag = read_shared_u32(&backend.overflow_flag_buffer);
 
@@ -236,4 +312,12 @@ pub(super) fn run_single_render_attempt(
         total_overlaps,
         valid_count,
     })
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn metal_stage_timing_enabled() -> bool {
+    std::env::var_os(METAL_STAGE_TIMING_ENV).is_some()
 }

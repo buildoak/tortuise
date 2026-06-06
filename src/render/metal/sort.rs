@@ -6,6 +6,8 @@ use super::error::MetalRenderError;
 use super::types::{RADIX_BUCKETS, THREADS_PER_GROUP_1D};
 use super::MetalBackend;
 
+pub(super) const RADIX_SORT_BIT_OFFSETS: [u32; 8] = [0u32, 8, 16, 24, 32, 40, 48, 56];
+
 pub fn div_ceil_u32(value: u32, divisor: u32) -> u32 {
     value.div_ceil(divisor)
 }
@@ -121,7 +123,7 @@ impl MetalBackend {
             .ok_or_else(|| MetalRenderError::Other("histogram count overflow".to_string()))?;
         let histogram_bytes = histogram_count as u64 * mem::size_of::<u32>() as u64;
 
-        for bit_offset in [0u32, 8, 16, 24] {
+        for bit_offset in RADIX_SORT_BIT_OFFSETS {
             let blit = command_buffer.new_blit_command_encoder();
             blit.fill_buffer(&self.radix_histograms, NSRange::new(0, histogram_bytes), 0);
             blit.end_encoding();

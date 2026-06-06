@@ -85,7 +85,7 @@ kernel void emit_tile_keys(
     constant ProjectedSplat* projected [[buffer(0)]],
     constant uint* tile_offsets [[buffer(1)]],
     device atomic_uint* tile_counters [[buffer(2)]],
-    device uint* sort_keys [[buffer(3)]],
+    device uint64_t* sort_keys [[buffer(3)]],
     device uint* sort_values [[buffer(4)]],
     constant uint& valid_count [[buffer(5)]],
     constant TileConfig& tile_config [[buffer(6)]],
@@ -105,25 +105,21 @@ kernel void emit_tile_keys(
         return;
     }
 
-    // Sort key layout: 10-bit tile_id | 18-bit depth | 4-bit tiebreaker
+    // Sort key layout: 10-bit tile_id | 32-bit sortable depth | 22-bit original_index
     //
     // 10 bits supports up to 1023 tiles (a 500x160 terminal with 16x16 tiles
-    // = ~320 tiles, plenty of headroom).  18-bit depth gives 262144 depth
-    // levels (4x more than the original 16-bit depth).
-    //
-    // The 4-bit tiebreaker from original_index ensures that splats at
-    // identical quantized depth produce distinct sort keys 93.75% of the
-    // time.  Combined with the deterministic radix sort scatter (which
-    // preserves input order for equal keys by ranking threads by ltid rather
-    // than atomic_fetch_add), the remaining collisions only swap splats at
-    // near-identical depth -- producing imperceptible visual difference.
+    // = ~320 tiles, plenty of headroom).  The Rust render path rejects larger
+    // tile grids before this kernel is dispatched.  Full sortable f32 depth
+    // bits match CPU total_cmp ordering for finite visible depths, and 22
+    // original_index bits give a deterministic tiebreaker for loaded scenes
+    // below 4,194,304 source splats.
     //
     // The atomic_fetch_add for slot assignment in emit_tile_keys remains
     // non-deterministic, but this only affects the input order fed to the
-    // radix sort.  Since the sort is keyed on (tile, depth, tiebreaker),
+    // radix sort.  Since the sort is keyed on (tile, depth, original_index),
     // the final sorted order is determined by the key, not the slot.
-    const uint depth_18 = float_to_sortable_uint(splat.depth) >> 14;  // top 18 of 32 bits
-    const uint tiebreaker = splat.original_index & 0xFu;              // low 4 bits of stable ID
+    const uint depth_key = float_to_sortable_uint(splat.depth);
+    const uint index_key = splat.original_index & 0x3FFFFFu;
 
     // Emit one key/value pair for each tile this splat overlaps.
     for (uint ty = tile_min.y; ty <= tile_max.y; ++ty) {
@@ -138,7 +134,10 @@ kernel void emit_tile_keys(
                 return;
             }
 
-            sort_keys[slot] = (tile_id << 22) | (depth_18 << 4) | tiebreaker;
+            sort_keys[slot] =
+                (uint64_t(tile_id) << 54) |
+                (uint64_t(depth_key) << 22) |
+                uint64_t(index_key);
             sort_values[slot] = index;
         }
     }

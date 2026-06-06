@@ -55,11 +55,12 @@ impl MetalBackend {
         &mut self,
         new_capacity: usize,
     ) -> Result<(), MetalRenderError> {
-        let bytes = bytes_for_u32_elems(new_capacity)?;
-        self.sort_keys_a = new_private_buffer(&self.device, bytes);
-        self.sort_keys_b = new_private_buffer(&self.device, bytes);
-        self.sort_values_a = new_private_buffer(&self.device, bytes);
-        self.sort_values_b = new_private_buffer(&self.device, bytes);
+        let key_bytes = bytes_for_u64_elems(new_capacity)?;
+        let value_bytes = bytes_for_u32_elems(new_capacity)?;
+        self.sort_keys_a = new_private_buffer(&self.device, key_bytes);
+        self.sort_keys_b = new_private_buffer(&self.device, key_bytes);
+        self.sort_values_a = new_private_buffer(&self.device, value_bytes);
+        self.sort_values_b = new_private_buffer(&self.device, value_bytes);
         self.sort_capacity = new_capacity;
         Ok(())
     }
@@ -160,6 +161,12 @@ impl MetalBackend {
 pub(super) fn bytes_for_u32_elems(count: usize) -> Result<usize, MetalRenderError> {
     count
         .checked_mul(mem::size_of::<u32>())
+        .ok_or_else(|| MetalRenderError::Other("buffer size overflow".to_string()))
+}
+
+pub(super) fn bytes_for_u64_elems(count: usize) -> Result<usize, MetalRenderError> {
+    count
+        .checked_mul(mem::size_of::<u64>())
         .ok_or_else(|| MetalRenderError::Other("buffer size overflow".to_string()))
 }
 

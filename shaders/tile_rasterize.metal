@@ -78,10 +78,16 @@ kernel void rasterize_tiles(
     threadgroup float shared_cov_c[BATCH_SIZE];
     threadgroup float shared_opacity[BATCH_SIZE];
     threadgroup uint shared_packed_color[BATCH_SIZE];
+    threadgroup uint shared_bbox_min_x[BATCH_SIZE];
+    threadgroup uint shared_bbox_min_y[BATCH_SIZE];
+    threadgroup uint shared_bbox_max_x[BATCH_SIZE];
+    threadgroup uint shared_bbox_max_y[BATCH_SIZE];
 
     const float pixel_center_x = float(pixel_x) + 0.5f;
     const float pixel_center_y = float(pixel_y) + 0.5f;
     const float saturation_transmittance_threshold = 1.0f - SATURATION_EPSILON;
+    const float max_pixel_x = float(tile_config.screen_width - 1);
+    const float max_pixel_y = float(tile_config.screen_height - 1);
 
     const uint total_splats = range_end - range_start;
     for (uint batch_offset = 0; batch_offset < total_splats; batch_offset += BATCH_SIZE) {
@@ -102,6 +108,14 @@ kernel void rasterize_tiles(
             shared_cov_c[linear_tid] = splat.cov_c;
             shared_opacity[linear_tid] = splat.opacity;
             shared_packed_color[linear_tid] = splat.packed_color;
+            shared_bbox_min_x[linear_tid] =
+                uint(min(max(floor(splat.screen_x - splat.radius_x), 0.0f), max_pixel_x));
+            shared_bbox_min_y[linear_tid] =
+                uint(min(max(floor(splat.screen_y - splat.radius_y), 0.0f), max_pixel_y));
+            shared_bbox_max_x[linear_tid] =
+                uint(min(max(ceil(splat.screen_x + splat.radius_x), 0.0f), max_pixel_x));
+            shared_bbox_max_y[linear_tid] =
+                uint(min(max(ceil(splat.screen_y + splat.radius_y), 0.0f), max_pixel_y));
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -109,13 +123,15 @@ kernel void rasterize_tiles(
         // Process the loaded batch for this pixel, preserving sorted front-to-back order.
         if (!done && pixel_in_bounds) {
             for (uint i = 0; i < batch_count; ++i) {
-                const float dx = pixel_center_x - shared_screen_x[i];
-                const float dy = pixel_center_y - shared_screen_y[i];
-
-                // Axis-aligned conservative bounds check before Gaussian work.
-                if (fabs(dx) > shared_radius_x[i] || fabs(dy) > shared_radius_y[i]) {
+                // Match the CPU rasterizer's inclusive integer bbox. This admits edge pixels
+                // selected by ceil(max) while still excluding pixels the CPU never visits.
+                if (pixel_x < shared_bbox_min_x[i] || pixel_x > shared_bbox_max_x[i] ||
+                    pixel_y < shared_bbox_min_y[i] || pixel_y > shared_bbox_max_y[i]) {
                     continue;
                 }
+
+                const float dx = pixel_center_x - shared_screen_x[i];
+                const float dy = pixel_center_y - shared_screen_y[i];
 
                 // Invert the 2x2 covariance matrix:
                 // [a b; b c]^-1 = (1/det) * [ c -b; -b a ], det = a*c - b*b

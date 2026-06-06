@@ -77,8 +77,8 @@ impl MetalBackend {
         let tile_counts = new_private_buffer(&device, mem::size_of::<u32>());
         let tile_offsets = new_private_buffer(&device, mem::size_of::<u32>() * 2);
         let tile_counters = new_private_buffer(&device, mem::size_of::<u32>());
-        let sort_keys_a = new_private_buffer(&device, mem::size_of::<u32>());
-        let sort_keys_b = new_private_buffer(&device, mem::size_of::<u32>());
+        let sort_keys_a = new_private_buffer(&device, mem::size_of::<u64>());
+        let sort_keys_b = new_private_buffer(&device, mem::size_of::<u64>());
         let sort_values_a = new_private_buffer(&device, mem::size_of::<u32>());
         let sort_values_b = new_private_buffer(&device, mem::size_of::<u32>());
         let radix_histograms = new_private_buffer(&device, mem::size_of::<u32>());

@@ -235,16 +235,19 @@ kernel void project_splats(
         return;
     }
 
-    // Compute tile bounds for this splat
-    float splat_min_x = max(screen_x - extent.x, 0.0f);
-    float splat_min_y = max(screen_y - extent.y, 0.0f);
-    float splat_max_x = min(screen_x + extent.x, float(tile_config.screen_width - 1));
-    float splat_max_y = min(screen_y + extent.y, float(tile_config.screen_height - 1));
+    // Compute tile bounds from the same inclusive integer bbox used by the CPU
+    // rasterizer/probe telemetry: floor(min edge), ceil(max edge), then clamp to screen.
+    float max_pixel_x = float(tile_config.screen_width - 1);
+    float max_pixel_y = float(tile_config.screen_height - 1);
+    float splat_min_x = min(max(floor(screen_x - extent.x), 0.0f), max_pixel_x);
+    float splat_min_y = min(max(floor(screen_y - extent.y), 0.0f), max_pixel_y);
+    float splat_max_x = min(max(ceil(screen_x + extent.x), 0.0f), max_pixel_x);
+    float splat_max_y = min(max(ceil(screen_y + extent.y), 0.0f), max_pixel_y);
 
     uint tile_min_x = uint(splat_min_x) / 16;  // TILE_SIZE = 16
     uint tile_min_y = uint(splat_min_y) / 16;
-    uint tile_max_x = min(uint(splat_max_x) / 16, tile_config.tile_count_x - 1);
-    uint tile_max_y = min(uint(splat_max_y) / 16, tile_config.tile_count_y - 1);
+    uint tile_max_x = uint(splat_max_x) / 16;
+    uint tile_max_y = uint(splat_max_y) / 16;
 
     uint packed_tile_min = (tile_min_y << 16) | tile_min_x;
     uint packed_tile_max = (tile_max_y << 16) | tile_max_x;
