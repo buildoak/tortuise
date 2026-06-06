@@ -19,6 +19,8 @@ use super::MetalBackend;
 
 const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const METAL_STAGE_TIMING_ENV: &str = "TORTUISE_METAL_STAGE_TIMING";
+const METAL_LOCAL_TILE_SORT_ENV: &str = "TORTUISE_METAL_LOCAL_TILE_SORT";
+const METAL_FAST_UNSORTED_ENV: &str = "TORTUISE_METAL_FAST_UNSORTED";
 
 #[derive(Debug)]
 pub(super) struct RenderAttemptResult {
@@ -35,6 +37,8 @@ pub(super) fn run_single_render_attempt(
     splat_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
+    let local_tile_sort_requested = metal_local_tile_sort_enabled();
+    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
@@ -159,15 +163,18 @@ pub(super) fn run_single_render_attempt(
     blit.end_encoding();
 
     backend.encode_prefix_scan_in_place(stage_a, &backend.tile_offsets, 0, num_tiles as u32)?;
-    let blit = stage_a.new_blit_command_encoder();
-    blit.copy_from_buffer(
-        &backend.tile_offsets,
-        0,
-        &backend.tile_offsets_readback,
-        0,
-        tile_offsets_bytes,
-    );
-    blit.end_encoding();
+    let should_read_tile_ranges = stage_timing_enabled || local_tile_sort_requested;
+    if should_read_tile_ranges {
+        let blit = stage_a.new_blit_command_encoder();
+        blit.copy_from_buffer(
+            &backend.tile_offsets,
+            0,
+            &backend.tile_offsets_readback,
+            0,
+            tile_offsets_bytes,
+        );
+        blit.end_encoding();
+    }
     let stage_a_encode_ms = stage_a_encode_started.map(|started| duration_ms(started.elapsed()));
     let stage_a_wait_started = stage_timing_enabled.then(Instant::now);
     let stage_a_result = commit_and_wait_or_disable_gpu(
@@ -214,14 +221,20 @@ pub(super) fn run_single_render_attempt(
         });
     }
 
-    let max_tile_range = read_max_tile_range(&backend.tile_offsets_readback, num_tiles)?;
-    let use_local_tile_sort = max_tile_range <= MAX_LOCAL_TILE_SORT;
+    let max_tile_range = if should_read_tile_ranges {
+        read_max_tile_range(&backend.tile_offsets_readback, num_tiles)?
+    } else {
+        0
+    };
+    let use_local_tile_sort = local_tile_sort_requested
+        && !fast_unsorted_enabled
+        && max_tile_range <= MAX_LOCAL_TILE_SORT;
 
     let dispatch_overlaps = total_overlaps;
     let mut sort_num_blocks = 0u32;
     let mut histogram_count = 0u32;
 
-    if dispatch_overlaps > 0 && !use_local_tile_sort {
+    if dispatch_overlaps > 0 && !fast_unsorted_enabled && !use_local_tile_sort {
         sort_num_blocks = div_ceil_u32(dispatch_overlaps, THREADS_PER_GROUP_1D);
         histogram_count = sort_num_blocks
             .checked_mul(RADIX_BUCKETS)
@@ -251,7 +264,9 @@ pub(super) fn run_single_render_attempt(
     encoder.end_encoding();
 
     if dispatch_overlaps > 0 {
-        let (sorted_keys, sorted_values) = if use_local_tile_sort {
+        let (sorted_keys, sorted_values) = if fast_unsorted_enabled {
+            (&backend.sort_keys_a, &backend.sort_values_a)
+        } else if use_local_tile_sort {
             backend.encode_local_tile_sort(stage_b, num_tiles as u32);
             local_tile_sort_used = true;
             (&backend.sort_keys_b, &backend.sort_values_b)
@@ -309,6 +324,7 @@ pub(super) fn run_single_render_attempt(
                 "\"radix_histogram_count\":{},",
                 "\"radix_passes\":{},",
                 "\"local_tile_sort\":{},",
+                "\"fast_unsorted\":{},",
                 "\"max_tile_range\":{},",
                 "\"max_local_tile_sort\":{}",
                 "}}"
@@ -323,6 +339,7 @@ pub(super) fn run_single_render_attempt(
             histogram_count,
             radix_passes,
             local_tile_sort_used,
+            fast_unsorted_enabled,
             max_tile_range,
             MAX_LOCAL_TILE_SORT
         );
@@ -344,6 +361,23 @@ fn duration_ms(duration: Duration) -> f64 {
 
 fn metal_stage_timing_enabled() -> bool {
     std::env::var_os(METAL_STAGE_TIMING_ENV).is_some()
+}
+
+fn metal_local_tile_sort_enabled() -> bool {
+    env_flag_enabled(METAL_LOCAL_TILE_SORT_ENV)
+}
+
+fn metal_fast_unsorted_enabled() -> bool {
+    env_flag_enabled(METAL_FAST_UNSORTED_ENV)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.trim();
+            !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+        })
+        .unwrap_or(false)
 }
 
 fn read_max_tile_range(

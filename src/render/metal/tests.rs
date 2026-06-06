@@ -1,5 +1,9 @@
 use super::{types, MetalBackend};
-use std::sync::{Mutex, MutexGuard, Once, OnceLock};
+use std::{
+    mem,
+    sync::{Mutex, MutexGuard, Once, OnceLock},
+    time::Duration,
+};
 
 use rand::{Rng, SeedableRng};
 
@@ -131,12 +135,124 @@ fn generate_seeded_splats(count: usize, seed: u64) -> Vec<Splat> {
     splats
 }
 
+fn make_radix_sort_stability_input(count: usize) -> Vec<(u64, u32)> {
+    let low_digits = [0x00_u64, 0x7f, 0x7f, 0x80, 0xff, 0x2a, 0x2a, 0x00];
+    let high_bytes = [0x11_u64, 0x11, 0x8e, 0x8e, 0xe4, 0xff];
+
+    (0..count)
+        .map(|i| {
+            let class = (i % 181) as u64;
+            let low = low_digits[class as usize % low_digits.len()];
+            let byte_1 = ((class / 8) % 4) * 0x11;
+            let byte_2 = (class.wrapping_mul(7).wrapping_add(class / 3)) & 0xff;
+            let high = high_bytes[class as usize % high_bytes.len()];
+            let key = (high << 56) | (class << 24) | (byte_2 << 16) | (byte_1 << 8) | low;
+            (key, i as u32)
+        })
+        .collect()
+}
+
+fn write_shared_buffer_slice<T: Copy>(buffer: &metal::Buffer, values: &[T]) {
+    unsafe {
+        std::ptr::copy_nonoverlapping(values.as_ptr(), buffer.contents() as *mut T, values.len());
+    }
+}
+
+fn read_shared_buffer_slice<T: Copy>(buffer: &metal::Buffer, count: usize) -> Vec<T> {
+    unsafe { std::slice::from_raw_parts(buffer.contents() as *const T, count).to_vec() }
+}
+
 #[test]
 fn test_struct_sizes() {
     assert_eq!(std::mem::size_of::<types::GpuSplatData>(), 48);
     assert_eq!(std::mem::size_of::<types::GpuCameraData>(), 72);
     assert_eq!(std::mem::size_of::<types::GpuProjectedSplat>(), 52);
     assert_eq!(std::mem::size_of::<types::TileConfig>(), 16);
+}
+
+#[test]
+fn test_radix_sort_direct_matches_cpu_stable_sort_with_repeated_digits() {
+    let _guard = match setup_metal_test() {
+        Some(g) => g,
+        None => return,
+    };
+
+    let input = make_radix_sort_stability_input(769);
+    let mut expected = input.clone();
+    expected.sort_by_key(|&(key, _value)| key);
+
+    let keys: Vec<u64> = input.iter().map(|&(key, _value)| key).collect();
+    let values: Vec<u32> = input.iter().map(|&(_key, value)| value).collect();
+    let key_bytes = mem::size_of_val(keys.as_slice());
+    let value_bytes = mem::size_of_val(values.as_slice());
+    let count_u32 = u32::try_from(input.len()).expect("test input should fit u32");
+
+    let mut backend = MetalBackend::new(0).expect("MetalBackend::new should succeed");
+    backend
+        .ensure_sort_capacity(input.len())
+        .expect("sort buffers should grow for test input");
+
+    let num_blocks = super::sort::div_ceil_u32(count_u32, types::THREADS_PER_GROUP_1D);
+    let histogram_count = num_blocks
+        .checked_mul(types::RADIX_BUCKETS)
+        .expect("test histogram count should fit u32");
+    backend
+        .ensure_histogram_capacity(histogram_count as usize)
+        .expect("histogram buffer should grow for test input");
+    backend
+        .ensure_block_sums_capacity_for_count(histogram_count)
+        .expect("block-sum scratch should grow for histogram scan");
+
+    unsafe {
+        *(backend.total_overlaps_buffer.contents() as *mut u32) = count_u32;
+    }
+
+    let key_upload = super::pipeline::new_shared_buffer(&backend.device, key_bytes);
+    let value_upload = super::pipeline::new_shared_buffer(&backend.device, value_bytes);
+    let key_readback = super::pipeline::new_shared_buffer(&backend.device, key_bytes);
+    let value_readback = super::pipeline::new_shared_buffer(&backend.device, value_bytes);
+    write_shared_buffer_slice(&key_upload, &keys);
+    write_shared_buffer_slice(&value_upload, &values);
+
+    let command_buffer = backend.command_queue.new_command_buffer();
+    let blit = command_buffer.new_blit_command_encoder();
+    blit.copy_from_buffer(&key_upload, 0, &backend.sort_keys_a, 0, key_bytes as u64);
+    blit.copy_from_buffer(
+        &value_upload,
+        0,
+        &backend.sort_values_a,
+        0,
+        value_bytes as u64,
+    );
+    blit.end_encoding();
+
+    let mut keys_in_a = true;
+    backend
+        .run_radix_sort_passes(command_buffer, count_u32, &mut keys_in_a)
+        .expect("radix sort kernels should encode");
+
+    let (sorted_keys, sorted_values) = if keys_in_a {
+        (&backend.sort_keys_a, &backend.sort_values_a)
+    } else {
+        (&backend.sort_keys_b, &backend.sort_values_b)
+    };
+    let blit = command_buffer.new_blit_command_encoder();
+    blit.copy_from_buffer(sorted_keys, 0, &key_readback, 0, key_bytes as u64);
+    blit.copy_from_buffer(sorted_values, 0, &value_readback, 0, value_bytes as u64);
+    blit.end_encoding();
+
+    super::sync::commit_and_wait_with_timeout(
+        command_buffer,
+        "radix_sort_direct_stability_test",
+        Duration::from_secs(5),
+    )
+    .expect("radix sort command buffer should complete");
+
+    let actual_keys = read_shared_buffer_slice::<u64>(&key_readback, input.len());
+    let actual_values = read_shared_buffer_slice::<u32>(&value_readback, input.len());
+    let actual: Vec<(u64, u32)> = actual_keys.into_iter().zip(actual_values).collect();
+
+    assert_eq!(actual, expected);
 }
 
 #[test]
