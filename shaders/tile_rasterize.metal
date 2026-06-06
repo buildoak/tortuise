@@ -154,10 +154,12 @@ kernel void rasterize_tiles(
                 const float splat_g = float((packed >> 8) & 0xFFu);
                 const float splat_b = float((packed >> 16) & 0xFFu);
 
-                // CPU-equivalent front-to-back accumulation using current transmittance.
-                color_r += splat_r * weight;
-                color_g += splat_g * weight;
-                color_b += splat_b * weight;
+                // CPU-equivalent front-to-back accumulation. The CPU framebuffer stores
+                // u8 channels and truncates after each splat contribution, not just at
+                // final framebuffer writeback.
+                color_r = floor(clamp(color_r + splat_r * weight, 0.0f, 255.0f));
+                color_g = floor(clamp(color_g + splat_g * weight, 0.0f, 255.0f));
+                color_b = floor(clamp(color_b + splat_b * weight, 0.0f, 255.0f));
 
                 transmittance *= (1.0f - alpha);
                 transmittance = max(transmittance, 0.0f);

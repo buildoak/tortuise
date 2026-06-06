@@ -65,10 +65,6 @@ kernel void radix_sort_scatter(
         return;
     }
 
-    threadgroup atomic_uint local_histogram[kRadixBuckets];
-    atomic_store_explicit(&local_histogram[ltid], 0u, memory_order_relaxed);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
     if (gid >= num_elements) {
         return;
     }
@@ -77,7 +73,19 @@ kernel void radix_sort_scatter(
     uint value = values_in[gid];
     uint digit = (key >> bit_offset) & kRadixMask;
 
-    uint local_rank = atomic_fetch_add_explicit(&local_histogram[digit], 1u, memory_order_relaxed);
+    // LSD radix sort must be stable on every pass.  A per-bucket atomic rank
+    // is not stable because atomic arrival order is not guaranteed to match
+    // input order, which can scramble tile ranges after later passes.  The
+    // bounded 256-element block lets us compute the deterministic in-block rank
+    // directly from prior input positions.
+    const uint block_start = block_id * kBlockSize;
+    uint local_rank = 0u;
+    for (uint i = block_start; i < gid; ++i) {
+        uint prior_digit = (keys_in[i] >> bit_offset) & kRadixMask;
+        if (prior_digit == digit) {
+            local_rank += 1u;
+        }
+    }
 
     uint base_offset = histograms[digit * num_blocks + block_id];
     uint out_index = base_offset + local_rank;

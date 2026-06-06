@@ -2720,6 +2720,33 @@ mod tests {
         let _ = fs::remove_dir_all(out_dir);
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn probe_run_tile_boundary_matches_metal_when_device_is_available() {
+        if metal::Device::system_default().is_none() {
+            eprintln!("Skipping Metal probe test: no system-default Metal device.");
+            return;
+        }
+
+        let out_dir = unique_temp_dir("probe_run_tile_boundary");
+        let mut config = ProbeConfig::new(&out_dir);
+        config.width = 96;
+        config.height = 72;
+        config.case = ProbeCase::TileBoundary;
+        config.backend = ProbeBackendSelection::Both;
+
+        let result = run_probe(&config, &[]).unwrap();
+
+        assert_eq!(result.diff_frames.len(), 1);
+        assert_eq!(
+            result.diff_frames[0].metrics.classification,
+            ProbeDiffClassification::Pass
+        );
+        assert_eq!(result.diff_frames[0].metrics.max_abs, 0);
+
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
     fn unique_temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
