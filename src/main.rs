@@ -36,6 +36,74 @@ pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 struct Cli {
     /// Path to a .ply or .splat scene file
     input: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "OUT_DIR",
+        help = "Render deterministic probe artifacts and exit"
+    )]
+    render_probe: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "cpu|metal|both",
+        default_value = "cpu",
+        help = "Probe backends; metal/both require building with --features metal"
+    )]
+    probe_backends: String,
+    #[arg(
+        long,
+        value_name = "WxH",
+        default_value = "64x48",
+        help = "Probe framebuffer size"
+    )]
+    probe_size: String,
+    #[arg(
+        long,
+        value_name = "x,y,z",
+        help = "Probe camera position; required with --render-probe"
+    )]
+    probe_camera_pos: Option<String>,
+    #[arg(
+        long,
+        value_name = "x,y,z",
+        default_value = "0,0,0",
+        help = "Probe camera look-at target"
+    )]
+    probe_look_at: String,
+    #[arg(
+        long,
+        value_name = "yaw,pitch",
+        conflicts_with = "probe_look_at",
+        help = "Probe camera yaw/pitch in radians"
+    )]
+    probe_yaw_pitch: Option<String>,
+    #[arg(
+        long,
+        default_value_t = 60.0,
+        help = "Probe camera field of view in degrees"
+    )]
+    probe_fov_deg: f32,
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 1,
+        help = "Nearest-neighbor scale for PNG inspection probe artifacts"
+    )]
+    probe_inspect_scale: usize,
+    #[arg(long, default_value_t = 1, help = "Probe frames to capture")]
+    probe_frames: usize,
+    #[arg(long, default_value_t = 0, help = "Probe warmup frames to discard")]
+    probe_warmup: usize,
+    #[arg(
+        long,
+        value_name = "loaded|channels|depth|blank|tile-boundary",
+        default_value = "channels",
+        help = "Probe scene case"
+    )]
+    probe_case: String,
+    #[arg(long, help = "Also emit terminal-cell probe artifacts when supported")]
+    probe_terminal: bool,
+    #[arg(long, help = "Exit nonzero when CPU/Metal probe comparison mismatches")]
+    probe_fail_on_mismatch: bool,
     #[cfg(feature = "metal")]
     #[arg(long, help = "Force CPU rendering", conflicts_with = "metal")]
     cpu: bool,
@@ -114,9 +182,159 @@ fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
     }
 }
 
+fn parse_probe_size(raw: &str) -> AppResult<(usize, usize)> {
+    let (w, h) = raw
+        .split_once('x')
+        .or_else(|| raw.split_once('X'))
+        .ok_or_else(|| format!("Invalid --probe-size '{raw}'. Expected WxH, for example 64x48"))?;
+    let width = w
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid probe width '{w}' in --probe-size '{raw}'"))?;
+    let height = h
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid probe height '{h}' in --probe-size '{raw}'"))?;
+    if width == 0 || height == 0 {
+        return Err("Probe size must be non-zero".into());
+    }
+    Ok((width, height))
+}
+
+fn parse_vec3(raw: &str, flag: &str) -> AppResult<Vec3> {
+    let parts = raw
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<f32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| format!("Invalid {flag} '{raw}'. Expected x,y,z"))?;
+    if parts.len() != 3 {
+        return Err(format!("Invalid {flag} '{raw}'. Expected x,y,z").into());
+    }
+    Ok(Vec3::new(parts[0], parts[1], parts[2]))
+}
+
+fn parse_yaw_pitch(raw: &str) -> AppResult<(f32, f32)> {
+    let parts = raw
+        .split(',')
+        .map(str::trim)
+        .map(str::parse::<f32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| format!("Invalid --probe-yaw-pitch '{raw}'. Expected yaw,pitch"))?;
+    if parts.len() != 2 {
+        return Err(format!("Invalid --probe-yaw-pitch '{raw}'. Expected yaw,pitch").into());
+    }
+    Ok((parts[0], parts[1]))
+}
+
+fn validate_probe_fov_deg(deg: f32) -> AppResult<()> {
+    if !deg.is_finite() || deg <= 0.0 || deg >= 180.0 {
+        return Err("--probe-fov-deg must be finite and greater than 0 and less than 180".into());
+    }
+    Ok(())
+}
+
+fn validate_probe_inspect_scale(scale: usize) -> AppResult<()> {
+    if scale == 0 {
+        return Err("--probe-inspect-scale must be greater than 0".into());
+    }
+    Ok(())
+}
+
+fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
+    let (width, height) = parse_probe_size(&cli.probe_size)?;
+    validate_probe_fov_deg(cli.probe_fov_deg)?;
+    validate_probe_inspect_scale(cli.probe_inspect_scale)?;
+    let backend = cli
+        .probe_backends
+        .parse::<render::probe::ProbeBackendSelection>()?;
+    let case = cli.probe_case.parse::<render::probe::ProbeCase>()?;
+    let position_raw = cli
+        .probe_camera_pos
+        .as_deref()
+        .ok_or("--probe-camera-pos is required with --render-probe")?;
+    let position = parse_vec3(position_raw, "--probe-camera-pos")?;
+    let target = parse_vec3(&cli.probe_look_at, "--probe-look-at")?;
+
+    let mut camera_spec = render::probe::ProbeCameraSpec {
+        position,
+        target,
+        fov: cli.probe_fov_deg.to_radians(),
+        ..render::probe::ProbeCameraSpec::default()
+    };
+    if let Some(yaw_pitch) = cli.probe_yaw_pitch.as_deref() {
+        let (yaw, pitch) = parse_yaw_pitch(yaw_pitch)?;
+        let mut camera = Camera::new(position, yaw, pitch);
+        camera.fov = camera_spec.fov;
+        camera.near = camera_spec.near;
+        camera.far = camera_spec.far;
+        camera_spec.target = camera.position + camera.forward;
+    }
+
+    let loaded_splats = if case == render::probe::ProbeCase::Loaded {
+        if cli.input.is_none() && !cli.demo {
+            return Err("--probe-case loaded requires an input path or --demo".into());
+        }
+        let mut splats = load_splats_from_cli(cli)?;
+        if cli.flip_y || cli.flip_z {
+            for splat in &mut splats {
+                if cli.flip_y {
+                    splat.position.y = -splat.position.y;
+                }
+                if cli.flip_z {
+                    splat.position.z = -splat.position.z;
+                }
+            }
+        }
+        splats
+    } else {
+        Vec::new()
+    };
+
+    let mut config = render::probe::ProbeConfig::new(out_dir);
+    config.width = width;
+    config.height = height;
+    config.backend = backend;
+    config.case = case;
+    config.camera = camera_spec;
+    config.frames = cli.probe_frames;
+    config.warmup_frames = cli.probe_warmup;
+    config.terminal_artifacts = cli.probe_terminal;
+    config.inspect_scale = cli.probe_inspect_scale;
+
+    let result = render::probe::run_probe(&config, &loaded_splats)?;
+    let mismatch_count = result
+        .diff_frames
+        .iter()
+        .filter(|frame| {
+            frame.metrics.classification != render::probe::ProbeDiffClassification::Pass
+        })
+        .count();
+    println!(
+        "{{\"status\":\"ok\",\"manifest\":\"{}\",\"contact_sheet\":\"{}\",\"frames\":{},\"mismatches\":{}}}",
+        result.manifest_path.display(),
+        result.contact_sheet_path.display(),
+        result.cpu_frames.len().max(result.metal_frames.len()),
+        mismatch_count
+    );
+
+    if cli.probe_fail_on_mismatch {
+        if mismatch_count > 0 {
+            return Err(format!(
+                "Probe comparison failed with {mismatch_count} mismatched frame(s)"
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> AppResult<()> {
     install_panic_hook();
     let cli = Cli::parse();
+
+    if let Some(out_dir) = cli.render_probe.clone() {
+        return run_render_probe(&cli, out_dir);
+    }
 
     if cli.input.is_none() && !cli.demo {
         Cli::command().print_help()?;
@@ -250,4 +468,26 @@ fn main() -> AppResult<()> {
 
     run_result?;
     cleanup_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_fov_deg_validation_rejects_invalid_values() {
+        for value in [0.0, 180.0, -1.0, f32::NAN, f32::INFINITY] {
+            let err = validate_probe_fov_deg(value).unwrap_err();
+            assert!(err.to_string().contains("--probe-fov-deg"));
+        }
+        validate_probe_fov_deg(35.0).unwrap();
+    }
+
+    #[test]
+    fn probe_inspect_scale_validation_rejects_zero() {
+        let err = validate_probe_inspect_scale(0).unwrap_err();
+        assert!(err.to_string().contains("--probe-inspect-scale"));
+        validate_probe_inspect_scale(1).unwrap();
+        validate_probe_inspect_scale(4).unwrap();
+    }
 }

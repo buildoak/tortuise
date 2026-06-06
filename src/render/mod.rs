@@ -5,6 +5,7 @@ pub mod hud;
 pub mod metal;
 pub mod modes;
 pub mod pipeline;
+pub mod probe;
 pub mod rasterizer;
 
 use std::time::Instant;

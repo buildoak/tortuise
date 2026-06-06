@@ -111,3 +111,8 @@ pub fn look_at_target(camera: &mut Camera, target: Vec3) {
     camera.pitch = to_target.y.clamp(-1.0, 1.0).asin();
     camera.update_vectors();
 }
+
+#[allow(dead_code)]
+pub fn look_at_origin(camera: &mut Camera) {
+    look_at_target(camera, Vec3::ZERO);
+}
