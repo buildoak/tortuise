@@ -13,6 +13,21 @@ use metal::{Buffer, CommandQueue, ComputePipelineState, Device};
 
 pub use error::MetalRenderError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetalProbeTelemetry {
+    pub tile_count_x: u32,
+    pub tile_count_y: u32,
+    pub num_tiles: usize,
+    pub tile_capacity: usize,
+    pub sort_capacity_before: usize,
+    pub sort_capacity_after: usize,
+    pub previous_total_overlaps: u32,
+    pub actual_total_overlaps: u32,
+    pub valid_count: u32,
+    pub retry_count: u32,
+    pub overflow_flag: u32,
+}
+
 pub struct MetalBackend {
     pub(super) device: Device,
     pub(super) command_queue: CommandQueue,
@@ -58,6 +73,16 @@ pub struct MetalBackend {
     pub(super) last_render_height: usize,
     pub(super) frames_below_threshold: u32,
     pub(super) gpu_disabled: bool,
+    pub(super) last_tile_count_x: u32,
+    pub(super) last_tile_count_y: u32,
+    pub(super) last_num_tiles: usize,
+    pub(super) last_sort_capacity_before: usize,
+    pub(super) last_sort_capacity_after: usize,
+    pub(super) last_previous_total_overlaps: u32,
+    pub(super) last_actual_total_overlaps: u32,
+    pub(super) last_valid_count: u32,
+    pub(super) last_retry_count: u32,
+    pub(super) last_overflow_flag: u32,
 }
 
 impl std::fmt::Debug for MetalBackend {
@@ -73,5 +98,23 @@ impl std::fmt::Debug for MetalBackend {
             .field("splats_uploaded", &self.splats_uploaded)
             .field("gpu_disabled", &self.gpu_disabled)
             .finish()
+    }
+}
+
+impl MetalBackend {
+    pub fn probe_telemetry(&self) -> MetalProbeTelemetry {
+        MetalProbeTelemetry {
+            tile_count_x: self.last_tile_count_x,
+            tile_count_y: self.last_tile_count_y,
+            num_tiles: self.last_num_tiles,
+            tile_capacity: self.tile_capacity,
+            sort_capacity_before: self.last_sort_capacity_before,
+            sort_capacity_after: self.last_sort_capacity_after,
+            previous_total_overlaps: self.last_previous_total_overlaps,
+            actual_total_overlaps: self.last_actual_total_overlaps,
+            valid_count: self.last_valid_count,
+            retry_count: self.last_retry_count,
+            overflow_flag: self.last_overflow_flag,
+        }
     }
 }

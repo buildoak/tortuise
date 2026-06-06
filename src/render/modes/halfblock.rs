@@ -109,9 +109,9 @@ pub fn downsample_packed_to_terminal_into(
             for y in top_y0..top_y1 {
                 for x in x0..x1 {
                     let p = fb[y * ss_width + x];
-                    tr += (p >> 16) & 0xFF;
+                    tr += p & 0xFF;
                     tg += (p >> 8) & 0xFF;
-                    tb += p & 0xFF;
+                    tb += (p >> 16) & 0xFF;
                     t_count += 1;
                 }
             }
@@ -124,9 +124,9 @@ pub fn downsample_packed_to_terminal_into(
             for y in bot_y0..bot_y1 {
                 for x in x0..x1 {
                     let p = fb[y * ss_width + x];
-                    br += (p >> 16) & 0xFF;
+                    br += p & 0xFF;
                     bg += (p >> 8) & 0xFF;
-                    bb += p & 0xFF;
+                    bb += (p >> 16) & 0xFF;
                     b_count += 1;
                 }
             }
@@ -153,5 +153,23 @@ pub fn downsample_packed_to_terminal_into(
 
             out[term_row * term_cols + term_col] = (bg_color, fg_color);
         }
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod tests {
+    use super::downsample_packed_to_terminal_into;
+
+    #[test]
+    fn packed_downsample_matches_probe_low_byte_red_layout() {
+        let fb = [
+            0x000000ff, 0x0000ff00, 0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000, 0x00ff0000,
+            0x00000000,
+        ];
+        let mut out = Vec::new();
+
+        downsample_packed_to_terminal_into(&fb, 2, 4, 1, 1, 2, &mut out);
+
+        assert_eq!(out, vec![([127, 127, 0], [0, 0, 127])]);
     }
 }

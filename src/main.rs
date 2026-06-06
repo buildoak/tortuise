@@ -95,6 +95,16 @@ struct Cli {
     probe_warmup: usize,
     #[arg(
         long,
+        value_name = "N",
+        help = "Enable probe timing and capture N benchmark frames"
+    )]
+    probe_benchmark_frames: Option<usize>,
+    #[arg(long, help = "Write probe timing JSON")]
+    probe_timing: bool,
+    #[arg(long, help = "Write CPU/Metal probe stage telemetry JSON")]
+    probe_stage_telemetry: bool,
+    #[arg(
+        long,
         value_name = "loaded|channels|depth|blank|tile-boundary",
         default_value = "channels",
         help = "Probe scene case"
@@ -295,10 +305,12 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     config.backend = backend;
     config.case = case;
     config.camera = camera_spec;
-    config.frames = cli.probe_frames;
+    config.frames = cli.probe_benchmark_frames.unwrap_or(cli.probe_frames);
     config.warmup_frames = cli.probe_warmup;
     config.terminal_artifacts = cli.probe_terminal;
     config.inspect_scale = cli.probe_inspect_scale;
+    config.stage_telemetry = cli.probe_stage_telemetry;
+    config.timing = cli.probe_timing || cli.probe_benchmark_frames.is_some();
 
     let result = render::probe::run_probe(&config, &loaded_splats)?;
     let mismatch_count = result
@@ -309,9 +321,14 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
         })
         .count();
     println!(
-        "{{\"status\":\"ok\",\"manifest\":\"{}\",\"contact_sheet\":\"{}\",\"frames\":{},\"mismatches\":{}}}",
+        "{{\"status\":\"ok\",\"manifest\":\"{}\",\"contact_sheet\":\"{}\",\"timing\":\"{}\",\"frames\":{},\"mismatches\":{}}}",
         result.manifest_path.display(),
         result.contact_sheet_path.display(),
+        result
+            .timing_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         result.cpu_frames.len().max(result.metal_frames.len()),
         mismatch_count
     );

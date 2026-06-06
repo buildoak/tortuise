@@ -19,6 +19,7 @@ const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 pub(super) struct RenderAttemptResult {
     pub overflow_flag: u32,
     pub total_overlaps: u32,
+    pub valid_count: u32,
 }
 
 pub(super) fn run_single_render_attempt(
@@ -158,10 +159,12 @@ pub(super) fn run_single_render_attempt(
     )?;
 
     let total_overlaps = read_shared_u32(&backend.total_overlaps_buffer);
+    let valid_count = read_shared_u32(&backend.valid_count_buffer);
     if total_overlaps > sort_capacity_u32 {
         return Ok(RenderAttemptResult {
             overflow_flag: 1,
             total_overlaps,
+            valid_count,
         });
     }
 
@@ -231,5 +234,6 @@ pub(super) fn run_single_render_attempt(
     Ok(RenderAttemptResult {
         overflow_flag,
         total_overlaps,
+        valid_count,
     })
 }

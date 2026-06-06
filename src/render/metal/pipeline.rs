@@ -124,6 +124,16 @@ impl MetalBackend {
             last_render_height: 0,
             frames_below_threshold: 0,
             gpu_disabled: false,
+            last_tile_count_x: 0,
+            last_tile_count_y: 0,
+            last_num_tiles: 0,
+            last_sort_capacity_before: 1,
+            last_sort_capacity_after: 1,
+            last_previous_total_overlaps: 0,
+            last_actual_total_overlaps: 0,
+            last_valid_count: 0,
+            last_retry_count: 0,
+            last_overflow_flag: 0,
         })
     }
 

@@ -12,9 +12,9 @@ use super::{make_color, AppState, HalfblockCell, HALF_BLOCK};
 #[cfg(feature = "metal")]
 fn rgb_from_packed_pixel(pixel: u32) -> [u8; 3] {
     [
-        ((pixel >> 16) & 0xFF) as u8,
-        ((pixel >> 8) & 0xFF) as u8,
         (pixel & 0xFF) as u8,
+        ((pixel >> 8) & 0xFF) as u8,
+        ((pixel >> 16) & 0xFF) as u8,
     ]
 }
 
@@ -47,6 +47,18 @@ fn build_halfblock_cells_rgb(
         super::modes::halfblock::downsample_to_terminal_into(
             fb, ss_width, ss_height, term_cols, term_rows, ss, out,
         );
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod tests {
+    use super::rgb_from_packed_pixel;
+
+    #[test]
+    fn packed_pixel_decode_matches_probe_low_byte_red_layout() {
+        assert_eq!(rgb_from_packed_pixel(0x000000ff), [255, 0, 0]);
+        assert_eq!(rgb_from_packed_pixel(0x0000ff00), [0, 255, 0]);
+        assert_eq!(rgb_from_packed_pixel(0x00ff0000), [0, 0, 255]);
     }
 }
 

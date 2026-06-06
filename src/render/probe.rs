@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use crate::camera::{self, Camera};
 use crate::math::Vec3;
@@ -12,6 +13,9 @@ use crate::sort::sort_by_depth;
 use crate::splat::{ProjectedSplat, Splat};
 
 use super::RenderState;
+
+const PROBE_TILE_SIZE: usize = 16;
+const PROBE_ALIGNMENT_WINDOW: i32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeBackendSelection {
@@ -232,6 +236,8 @@ pub struct ProbeConfig {
     pub frames: usize,
     pub warmup_frames: usize,
     pub terminal_artifacts: bool,
+    pub stage_telemetry: bool,
+    pub timing: bool,
 }
 
 impl ProbeConfig {
@@ -247,6 +253,8 @@ impl ProbeConfig {
             frames: 1,
             warmup_frames: 0,
             terminal_artifacts: false,
+            stage_telemetry: false,
+            timing: false,
         }
     }
 }
@@ -280,6 +288,7 @@ pub struct ProbeFrameArtifact {
     pub frame_path: PathBuf,
     pub inspect_png_path: PathBuf,
     pub stats_path: PathBuf,
+    pub stage_telemetry_path: Option<PathBuf>,
     pub stats: ProbeFrameStats,
 }
 
@@ -289,7 +298,9 @@ pub struct ProbeMetalFrameArtifact {
     pub inspect_png_path: PathBuf,
     pub stats_path: PathBuf,
     pub packed_u32le_path: PathBuf,
+    pub stage_telemetry_path: Option<PathBuf>,
     pub stats: ProbeFrameStats,
+    pub telemetry: Option<ProbeMetalStageTelemetry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,7 +308,8 @@ pub enum ProbeDiffClassification {
     Pass,
     Blank,
     ChannelSwap,
-    Mismatch,
+    GlobalShift,
+    StructuredMismatch,
 }
 
 impl ProbeDiffClassification {
@@ -306,9 +318,43 @@ impl ProbeDiffClassification {
             Self::Pass => "pass",
             Self::Blank => "blank",
             Self::ChannelSwap => "channel_swap",
-            Self::Mismatch => "mismatch",
+            Self::GlobalShift => "global_shift",
+            Self::StructuredMismatch => "structured_mismatch",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeSignedBoundingBoxDelta {
+    pub min_x: i64,
+    pub min_y: i64,
+    pub max_x: i64,
+    pub max_y: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbePointF64 {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeCentroidDelta {
+    pub reference: Option<ProbePointF64>,
+    pub candidate: Option<ProbePointF64>,
+    pub dx: Option<f64>,
+    pub dy: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeTranslationAlignmentMetrics {
+    pub dx: i32,
+    pub dy: i32,
+    pub overlap_pixels: usize,
+    pub mean_abs: f64,
+    pub max_abs: u8,
+    pub mismatch_pixels: usize,
+    pub mismatch_ratio: f64,
 }
 
 impl fmt::Display for ProbeDiffClassification {
@@ -329,7 +375,68 @@ pub struct ProbeDiffMetrics {
     pub sum_abs_r: u64,
     pub sum_abs_g: u64,
     pub sum_abs_b: u64,
+    pub reference_nonblack_pixels: usize,
+    pub candidate_nonblack_pixels: usize,
+    pub nonblack_delta: i64,
+    pub bbox_delta: Option<ProbeSignedBoundingBoxDelta>,
+    pub centroid_delta: ProbeCentroidDelta,
+    pub best_translation: ProbeTranslationAlignmentMetrics,
     pub classification: ProbeDiffClassification,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeTileBounds {
+    pub min_x: usize,
+    pub min_y: usize,
+    pub max_x: usize,
+    pub max_y: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeProjectedSplatTelemetry {
+    pub original_index: usize,
+    pub screen_x: f32,
+    pub screen_y: f32,
+    pub depth: f32,
+    pub radius_x: f32,
+    pub radius_y: f32,
+    pub bbox: ProbeBoundingBox,
+    pub tile_bounds: ProbeTileBounds,
+    pub opacity: f32,
+    pub color: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeMetalStageTelemetry {
+    pub tile_count_x: u32,
+    pub tile_count_y: u32,
+    pub num_tiles: usize,
+    pub tile_capacity: usize,
+    pub sort_capacity_before: usize,
+    pub sort_capacity_after: usize,
+    pub previous_total_overlaps: u32,
+    pub actual_total_overlaps: u32,
+    pub valid_count: u32,
+    pub retry_count: u32,
+    pub overflow_flag: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProbeBackendTiming {
+    pub frames: usize,
+    pub warmup_frames: usize,
+    pub warmup_ms: f64,
+    pub render_ms: f64,
+    pub readback_normalize_ms: f64,
+    pub artifact_write_ms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProbeTimingSummary {
+    pub cpu: Option<ProbeBackendTiming>,
+    pub metal: Option<ProbeBackendTiming>,
+    pub diff_artifact_ms: f64,
+    pub manifest_artifact_ms: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -348,6 +455,8 @@ pub struct ProbeRunResult {
     pub metal_frames: Vec<ProbeMetalFrameArtifact>,
     pub diff_frames: Vec<ProbeDiffFrameArtifact>,
     pub diff_summary_path: Option<PathBuf>,
+    pub timing_path: Option<PathBuf>,
+    pub timing: Option<ProbeTimingSummary>,
 }
 
 pub enum ProbeError {
@@ -398,19 +507,24 @@ pub fn run_probe(
 
     let mut cpu_frames = Vec::new();
     let mut cpu_framebuffers = Vec::new();
+    let mut timing = ProbeTimingSummary::default();
     if config.backend.renders_cpu() {
-        let (artifacts, framebuffers) = render_cpu_probe_frames(config, &splats, &camera)?;
+        let (artifacts, framebuffers, cpu_timing) =
+            render_cpu_probe_frames(config, &splats, &camera)?;
         cpu_frames = artifacts;
         cpu_framebuffers = framebuffers;
+        timing.cpu = Some(cpu_timing);
     }
 
     #[cfg(feature = "metal")]
     let (mut metal_frames, mut metal_framebuffers) = (Vec::new(), Vec::new());
     #[cfg(feature = "metal")]
     if config.backend.renders_metal() {
-        let (artifacts, framebuffers) = render_metal_probe_frames(config, &splats, &camera)?;
+        let (artifacts, framebuffers, metal_timing) =
+            render_metal_probe_frames(config, &splats, &camera)?;
         metal_frames = artifacts;
         metal_framebuffers = framebuffers;
+        timing.metal = Some(metal_timing);
     }
     #[cfg(not(feature = "metal"))]
     let metal_frames = Vec::new();
@@ -421,6 +535,7 @@ pub fn run_probe(
     let (mut diff_frames, mut diff_summary_path) = (Vec::new(), None);
     #[cfg(feature = "metal")]
     if config.backend.compares_cpu_to_metal() {
+        let started = Instant::now();
         let diff_dir = config.out_dir.join("diff");
         let inspect_diff_dir = config.out_dir.join("inspect").join("diff");
         fs::create_dir_all(&diff_dir)?;
@@ -437,6 +552,7 @@ pub fn run_probe(
         let summary_path = diff_dir.join("summary.json");
         write_diff_summary_json(&summary_path, &diff_frames)?;
         diff_summary_path = Some(summary_path);
+        timing.diff_artifact_ms += duration_ms(started.elapsed());
     }
     #[cfg(not(feature = "metal"))]
     let diff_frames = Vec::new();
@@ -465,6 +581,13 @@ pub fn run_probe(
             frame,
         )?;
     }
+    let manifest_started = Instant::now();
+    let timing_path = if config.timing {
+        let path = config.out_dir.join("probe_timing.json");
+        Some(path)
+    } else {
+        None
+    };
     write_manifest_json(
         &manifest_path,
         config,
@@ -472,9 +595,27 @@ pub fn run_probe(
         &metal_frames,
         &diff_frames,
         diff_summary_path.as_deref(),
+        timing_path.as_deref(),
+        if config.timing { Some(&timing) } else { None },
         &contact_sheet_path,
         &inspect_contact_sheet_path,
     )?;
+    timing.manifest_artifact_ms += duration_ms(manifest_started.elapsed());
+    if let Some(path) = &timing_path {
+        write_manifest_json(
+            &manifest_path,
+            config,
+            &cpu_frames,
+            &metal_frames,
+            &diff_frames,
+            diff_summary_path.as_deref(),
+            timing_path.as_deref(),
+            Some(&timing),
+            &contact_sheet_path,
+            &inspect_contact_sheet_path,
+        )?;
+        write_timing_json(path, &timing)?;
+    }
 
     Ok(ProbeRunResult {
         manifest_path,
@@ -484,6 +625,8 @@ pub fn run_probe(
         metal_frames,
         diff_frames,
         diff_summary_path,
+        timing_path,
+        timing: if config.timing { Some(timing) } else { None },
     })
 }
 
@@ -491,7 +634,14 @@ fn render_cpu_probe_frames(
     config: &ProbeConfig,
     splats: &[Splat],
     camera: &Camera,
-) -> Result<(Vec<ProbeFrameArtifact>, Vec<Vec<[u8; 3]>>), ProbeError> {
+) -> Result<
+    (
+        Vec<ProbeFrameArtifact>,
+        Vec<Vec<[u8; 3]>>,
+        ProbeBackendTiming,
+    ),
+    ProbeError,
+> {
     let cpu_dir = config.out_dir.join("cpu");
     let inspect_cpu_dir = config.out_dir.join("inspect").join("cpu");
     fs::create_dir_all(&cpu_dir)?;
@@ -501,14 +651,30 @@ fn render_cpu_probe_frames(
         fs::create_dir_all(&terminal_dir)?;
     }
 
+    let mut timing = ProbeBackendTiming {
+        frames: config.frames,
+        warmup_frames: config.warmup_frames,
+        ..ProbeBackendTiming::default()
+    };
+
     for _ in 0..config.warmup_frames {
+        let started = Instant::now();
         let _ = render_cpu_frame(splats, camera, config.width, config.height);
+        timing.warmup_ms += duration_ms(started.elapsed());
     }
 
     let mut artifacts = Vec::with_capacity(config.frames);
     let mut framebuffers = Vec::with_capacity(config.frames);
     for frame_idx in 0..config.frames {
-        let frame = render_cpu_frame(splats, camera, config.width, config.height);
+        let render_started = Instant::now();
+        let (frame, projected_splats) = render_cpu_frame_with_projection(
+            splats,
+            camera,
+            config.width,
+            config.height,
+            config.stage_telemetry,
+        );
+        timing.render_ms += duration_ms(render_started.elapsed());
         let stats = compute_frame_stats(&frame, config.width, config.height);
 
         let frame_path = cpu_dir.join(format!("frame_{frame_idx:03}.ppm"));
@@ -517,6 +683,12 @@ fn render_cpu_probe_frames(
             config.inspect_scale
         ));
         let stats_path = cpu_dir.join(format!("frame_{frame_idx:03}.json"));
+        let stage_telemetry_path = if config.stage_telemetry {
+            Some(cpu_dir.join(format!("stage_telemetry_frame_{frame_idx:03}.json")))
+        } else {
+            None
+        };
+        let artifact_started = Instant::now();
         write_ppm(&frame_path, config.width, config.height, &frame)?;
         write_png_inspection(
             &inspect_png_path,
@@ -526,6 +698,15 @@ fn render_cpu_probe_frames(
             &frame,
         )?;
         write_frame_stats_json(&stats_path, &stats)?;
+        if let Some(path) = &stage_telemetry_path {
+            write_cpu_stage_telemetry_json(
+                path,
+                splats.len(),
+                config.width,
+                config.height,
+                projected_splats.as_deref().unwrap_or(&[]),
+            )?;
+        }
         if config.terminal_artifacts {
             write_halfblock_ansi(
                 &terminal_dir.join(format!("cpu_frame_{frame_idx:03}.ansi.txt")),
@@ -534,17 +715,19 @@ fn render_cpu_probe_frames(
                 &frame,
             )?;
         }
+        timing.artifact_write_ms += duration_ms(artifact_started.elapsed());
 
         artifacts.push(ProbeFrameArtifact {
             frame_path,
             inspect_png_path,
             stats_path,
+            stage_telemetry_path,
             stats,
         });
         framebuffers.push(frame);
     }
 
-    Ok((artifacts, framebuffers))
+    Ok((artifacts, framebuffers, timing))
 }
 
 #[cfg(feature = "metal")]
@@ -552,7 +735,14 @@ fn render_metal_probe_frames(
     config: &ProbeConfig,
     splats: &[Splat],
     camera: &Camera,
-) -> Result<(Vec<ProbeMetalFrameArtifact>, Vec<Vec<[u8; 3]>>), ProbeError> {
+) -> Result<
+    (
+        Vec<ProbeMetalFrameArtifact>,
+        Vec<Vec<[u8; 3]>>,
+        ProbeBackendTiming,
+    ),
+    ProbeError,
+> {
     let metal_dir = config.out_dir.join("metal");
     let inspect_metal_dir = config.out_dir.join("inspect").join("metal");
     fs::create_dir_all(&metal_dir)?;
@@ -564,18 +754,34 @@ fn render_metal_probe_frames(
 
     let mut backend = super::metal::MetalBackend::new(splats.len())?;
     backend.upload_splats(splats)?;
+    let mut timing = ProbeBackendTiming {
+        frames: config.frames,
+        warmup_frames: config.warmup_frames,
+        ..ProbeBackendTiming::default()
+    };
     for _ in 0..config.warmup_frames {
+        let started = Instant::now();
         backend.render(camera, config.width, config.height, splats.len())?;
         let _ = backend.framebuffer_slice();
+        timing.warmup_ms += duration_ms(started.elapsed());
     }
 
     let mut artifacts = Vec::with_capacity(config.frames);
     let mut framebuffers = Vec::with_capacity(config.frames);
     for frame_idx in 0..config.frames {
+        let render_started = Instant::now();
         backend.render(camera, config.width, config.height, splats.len())?;
+        timing.render_ms += duration_ms(render_started.elapsed());
+        let readback_started = Instant::now();
         let packed = backend.framebuffer_slice();
         let frame = normalize_metal_packed_pixels(packed);
+        timing.readback_normalize_ms += duration_ms(readback_started.elapsed());
         let stats = compute_frame_stats(&frame, config.width, config.height);
+        let telemetry = if config.stage_telemetry {
+            Some(ProbeMetalStageTelemetry::from(backend.probe_telemetry()))
+        } else {
+            None
+        };
 
         let frame_path = metal_dir.join(format!("frame_{frame_idx:03}.ppm"));
         let inspect_png_path = inspect_metal_dir.join(format!(
@@ -584,6 +790,12 @@ fn render_metal_probe_frames(
         ));
         let stats_path = metal_dir.join(format!("frame_{frame_idx:03}.json"));
         let packed_u32le_path = metal_dir.join(format!("frame_{frame_idx:03}.packed_u32le.bin"));
+        let stage_telemetry_path = if config.stage_telemetry {
+            Some(metal_dir.join(format!("stage_telemetry_frame_{frame_idx:03}.json")))
+        } else {
+            None
+        };
+        let artifact_started = Instant::now();
         write_ppm(&frame_path, config.width, config.height, &frame)?;
         write_png_inspection(
             &inspect_png_path,
@@ -594,6 +806,9 @@ fn render_metal_probe_frames(
         )?;
         write_frame_stats_json(&stats_path, &stats)?;
         write_packed_u32le(&packed_u32le_path, packed)?;
+        if let (Some(path), Some(telemetry)) = (&stage_telemetry_path, &telemetry) {
+            write_metal_stage_telemetry_json(path, telemetry)?;
+        }
         if config.terminal_artifacts {
             write_halfblock_ansi(
                 &terminal_dir.join(format!("metal_frame_{frame_idx:03}.ansi.txt")),
@@ -602,18 +817,21 @@ fn render_metal_probe_frames(
                 &frame,
             )?;
         }
+        timing.artifact_write_ms += duration_ms(artifact_started.elapsed());
 
         artifacts.push(ProbeMetalFrameArtifact {
             frame_path,
             inspect_png_path,
             stats_path,
             packed_u32le_path,
+            stage_telemetry_path,
             stats,
+            telemetry,
         });
         framebuffers.push(frame);
     }
 
-    Ok((artifacts, framebuffers))
+    Ok((artifacts, framebuffers, timing))
 }
 
 pub fn render_cpu_frame(
@@ -622,6 +840,16 @@ pub fn render_cpu_frame(
     width: usize,
     height: usize,
 ) -> Vec<[u8; 3]> {
+    render_cpu_frame_with_projection(splats, camera, width, height, false).0
+}
+
+fn render_cpu_frame_with_projection(
+    splats: &[Splat],
+    camera: &Camera,
+    width: usize,
+    height: usize,
+    keep_projection: bool,
+) -> (Vec<[u8; 3]>, Option<Vec<ProjectedSplat>>) {
     let len = width.saturating_mul(height);
     let mut render_state = RenderState {
         framebuffer: vec![[0, 0, 0]; len],
@@ -646,7 +874,31 @@ pub fn render_cpu_frame(
     sort_by_depth(&mut projected_splats);
     super::rasterizer::rasterize_splats(&projected_splats, &mut render_state, width, height);
 
-    render_state.framebuffer
+    let telemetry_projection = if keep_projection {
+        Some(projected_splats)
+    } else {
+        None
+    };
+    (render_state.framebuffer, telemetry_projection)
+}
+
+#[cfg(feature = "metal")]
+impl From<super::metal::MetalProbeTelemetry> for ProbeMetalStageTelemetry {
+    fn from(value: super::metal::MetalProbeTelemetry) -> Self {
+        Self {
+            tile_count_x: value.tile_count_x,
+            tile_count_y: value.tile_count_y,
+            num_tiles: value.num_tiles,
+            tile_capacity: value.tile_capacity,
+            sort_capacity_before: value.sort_capacity_before,
+            sort_capacity_after: value.sort_capacity_after,
+            previous_total_overlaps: value.previous_total_overlaps,
+            actual_total_overlaps: value.actual_total_overlaps,
+            valid_count: value.valid_count,
+            retry_count: value.retry_count,
+            overflow_flag: value.overflow_flag,
+        }
+    }
 }
 
 pub fn compute_frame_stats(frame: &[[u8; 3]], width: usize, height: usize) -> ProbeFrameStats {
@@ -906,6 +1158,18 @@ pub fn compute_diff_metrics(
         mismatch_pixels as f64 / pixel_count as f64
     };
     let p95_abs = percentile_nearest_rank(&all_abs, 95);
+    let reference_stats = compute_frame_stats(reference, width, height);
+    let candidate_stats = compute_frame_stats(candidate, width, height);
+    let reference_nonblack_pixels = reference_stats.nonblack_pixels;
+    let candidate_nonblack_pixels = candidate_stats.nonblack_pixels;
+    let nonblack_delta = candidate_nonblack_pixels as i64 - reference_nonblack_pixels as i64;
+    let bbox_delta = bbox_delta(reference_stats.bbox.as_ref(), candidate_stats.bbox.as_ref());
+    let centroid_delta = centroid_delta(
+        frame_nonblack_centroid(reference, width),
+        frame_nonblack_centroid(candidate, width),
+    );
+    let best_translation =
+        best_translation_alignment(reference, candidate, width, height, PROBE_ALIGNMENT_WINDOW);
 
     let mut metrics = ProbeDiffMetrics {
         width,
@@ -918,10 +1182,165 @@ pub fn compute_diff_metrics(
         sum_abs_r,
         sum_abs_g,
         sum_abs_b,
-        classification: ProbeDiffClassification::Mismatch,
+        reference_nonblack_pixels,
+        candidate_nonblack_pixels,
+        nonblack_delta,
+        bbox_delta,
+        centroid_delta,
+        best_translation,
+        classification: ProbeDiffClassification::StructuredMismatch,
     };
     metrics.classification = classify_diff(reference, candidate, &metrics);
     metrics
+}
+
+fn bbox_delta(
+    reference: Option<&ProbeBoundingBox>,
+    candidate: Option<&ProbeBoundingBox>,
+) -> Option<ProbeSignedBoundingBoxDelta> {
+    let reference = reference?;
+    let candidate = candidate?;
+    Some(ProbeSignedBoundingBoxDelta {
+        min_x: candidate.min_x as i64 - reference.min_x as i64,
+        min_y: candidate.min_y as i64 - reference.min_y as i64,
+        max_x: candidate.max_x as i64 - reference.max_x as i64,
+        max_y: candidate.max_y as i64 - reference.max_y as i64,
+    })
+}
+
+fn frame_nonblack_centroid(frame: &[[u8; 3]], width: usize) -> Option<ProbePointF64> {
+    let mut count = 0usize;
+    let mut sum_x = 0f64;
+    let mut sum_y = 0f64;
+    for (idx, pixel) in frame.iter().enumerate() {
+        if pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 {
+            continue;
+        }
+        count += 1;
+        let x = if width == 0 { 0 } else { idx % width };
+        let y = if width == 0 { 0 } else { idx / width };
+        sum_x += x as f64;
+        sum_y += y as f64;
+    }
+
+    if count == 0 {
+        None
+    } else {
+        Some(ProbePointF64 {
+            x: sum_x / count as f64,
+            y: sum_y / count as f64,
+        })
+    }
+}
+
+fn centroid_delta(
+    reference: Option<ProbePointF64>,
+    candidate: Option<ProbePointF64>,
+) -> ProbeCentroidDelta {
+    let (dx, dy) = match (&reference, &candidate) {
+        (Some(reference), Some(candidate)) => (
+            Some(candidate.x - reference.x),
+            Some(candidate.y - reference.y),
+        ),
+        _ => (None, None),
+    };
+    ProbeCentroidDelta {
+        reference,
+        candidate,
+        dx,
+        dy,
+    }
+}
+
+fn best_translation_alignment(
+    reference: &[[u8; 3]],
+    candidate: &[[u8; 3]],
+    width: usize,
+    height: usize,
+    window: i32,
+) -> ProbeTranslationAlignmentMetrics {
+    let mut best = translation_alignment(reference, candidate, width, height, 0, 0);
+    for dy in -window..=window {
+        for dx in -window..=window {
+            let candidate_metrics =
+                translation_alignment(reference, candidate, width, height, dx, dy);
+            if is_better_translation(&candidate_metrics, &best) {
+                best = candidate_metrics;
+            }
+        }
+    }
+    best
+}
+
+fn translation_alignment(
+    reference: &[[u8; 3]],
+    candidate: &[[u8; 3]],
+    width: usize,
+    height: usize,
+    dx: i32,
+    dy: i32,
+) -> ProbeTranslationAlignmentMetrics {
+    let mut sum_abs = 0u64;
+    let mut max_abs = 0u8;
+    let mut mismatch_pixels = 0usize;
+    let mut overlap_pixels = 0usize;
+
+    for y in 0..height {
+        let shifted_y = y as i32 + dy;
+        if shifted_y < 0 || shifted_y >= height as i32 {
+            continue;
+        }
+        for x in 0..width {
+            let shifted_x = x as i32 + dx;
+            if shifted_x < 0 || shifted_x >= width as i32 {
+                continue;
+            }
+            let reference_pixel = reference[y * width + x];
+            let candidate_pixel = candidate[shifted_y as usize * width + shifted_x as usize];
+            let dr = abs_diff_u8(reference_pixel[0], candidate_pixel[0]);
+            let dg = abs_diff_u8(reference_pixel[1], candidate_pixel[1]);
+            let db = abs_diff_u8(reference_pixel[2], candidate_pixel[2]);
+            if dr != 0 || dg != 0 || db != 0 {
+                mismatch_pixels += 1;
+            }
+            sum_abs += dr as u64 + dg as u64 + db as u64;
+            max_abs = max_abs.max(dr).max(dg).max(db);
+            overlap_pixels += 1;
+        }
+    }
+
+    let total_channels = overlap_pixels.saturating_mul(3);
+    ProbeTranslationAlignmentMetrics {
+        dx,
+        dy,
+        overlap_pixels,
+        mean_abs: if total_channels == 0 {
+            f64::INFINITY
+        } else {
+            sum_abs as f64 / total_channels as f64
+        },
+        max_abs,
+        mismatch_pixels,
+        mismatch_ratio: if overlap_pixels == 0 {
+            1.0
+        } else {
+            mismatch_pixels as f64 / overlap_pixels as f64
+        },
+    }
+}
+
+fn is_better_translation(
+    candidate: &ProbeTranslationAlignmentMetrics,
+    best: &ProbeTranslationAlignmentMetrics,
+) -> bool {
+    candidate
+        .mismatch_ratio
+        .total_cmp(&best.mismatch_ratio)
+        .then(candidate.mean_abs.total_cmp(&best.mean_abs))
+        .then(candidate.max_abs.cmp(&best.max_abs))
+        .then(best.overlap_pixels.cmp(&candidate.overlap_pixels))
+        .then((candidate.dx.abs() + candidate.dy.abs()).cmp(&(best.dx.abs() + best.dy.abs())))
+        .is_lt()
 }
 
 fn make_diff_frame(reference: &[[u8; 3]], candidate: &[[u8; 3]]) -> Vec<[u8; 3]> {
@@ -1071,6 +1490,8 @@ fn write_manifest_json(
     metal_frames: &[ProbeMetalFrameArtifact],
     diff_frames: &[ProbeDiffFrameArtifact],
     diff_summary_path: Option<&Path>,
+    timing_path: Option<&Path>,
+    timing: Option<&ProbeTimingSummary>,
     contact_sheet_path: &Path,
     inspect_contact_sheet_path: &Path,
 ) -> Result<(), ProbeError> {
@@ -1087,6 +1508,7 @@ fn write_manifest_json(
                     "\"frame\":\"{}\",",
                     "\"inspect_png\":\"{}\",",
                     "\"stats\":\"{}\",",
+                    "\"stage_telemetry\":{},",
                     "\"metrics\":{}",
                     "}}"
                 ),
@@ -1094,6 +1516,7 @@ fn write_manifest_json(
                 json_escape(&display_path(&frame.frame_path)),
                 json_escape(&display_path(&frame.inspect_png_path)),
                 json_escape(&display_path(&frame.stats_path)),
+                optional_path_json(frame.stage_telemetry_path.as_deref()),
                 frame_stats_json(&frame.stats)
             )
         })
@@ -1111,6 +1534,8 @@ fn write_manifest_json(
                     "\"inspect_png\":\"{}\",",
                     "\"stats\":\"{}\",",
                     "\"packed_u32le\":\"{}\",",
+                    "\"stage_telemetry\":{},",
+                    "\"telemetry\":{},",
                     "\"metrics\":{}",
                     "}}"
                 ),
@@ -1119,6 +1544,12 @@ fn write_manifest_json(
                 json_escape(&display_path(&frame.inspect_png_path)),
                 json_escape(&display_path(&frame.stats_path)),
                 json_escape(&display_path(&frame.packed_u32le_path)),
+                optional_path_json(frame.stage_telemetry_path.as_deref()),
+                frame
+                    .telemetry
+                    .as_ref()
+                    .map(metal_stage_telemetry_json)
+                    .unwrap_or_else(|| "null".to_string()),
                 frame_stats_json(&frame.stats)
             )
         })
@@ -1149,6 +1580,10 @@ fn write_manifest_json(
         Some(path) => format!("\"{}\"", json_escape(&display_path(path))),
         None => "null".to_string(),
     };
+    let timing_artifact = optional_path_json(timing_path);
+    let timing_summary = timing
+        .map(probe_timing_summary_json)
+        .unwrap_or_else(|| "null".to_string());
     let json = format!(
         concat!(
             "{{\n",
@@ -1163,11 +1598,15 @@ fn write_manifest_json(
             "  \"frames\": {},\n",
             "  \"warmup_frames\": {},\n",
             "  \"terminal_artifacts\": {},\n",
+            "  \"stage_telemetry\": {},\n",
+            "  \"timing_enabled\": {},\n",
             "  \"artifacts\": {{\n",
             "    \"contact_sheet\": \"{}\",\n",
             "    \"inspect_contact_sheet\": \"{}\",\n",
-            "    \"diff_summary\": {}\n",
+            "    \"diff_summary\": {},\n",
+            "    \"timing\": {}\n",
             "  }},\n",
+            "  \"timing\": {},\n",
             "  \"cpu_frames\": [\n      {}\n  ],\n",
             "  \"metal_frames\": [\n      {}\n  ],\n",
             "  \"diff_frames\": [\n      {}\n  ]\n",
@@ -1183,9 +1622,13 @@ fn write_manifest_json(
         config.frames,
         config.warmup_frames,
         config.terminal_artifacts,
+        config.stage_telemetry,
+        config.timing,
         json_escape(&display_path(contact_sheet_path)),
         json_escape(&display_path(inspect_contact_sheet_path)),
         diff_summary,
+        timing_artifact,
+        timing_summary,
         frames_json,
         metal_frames_json,
         diff_frames_json
@@ -1275,6 +1718,11 @@ fn frame_stats_json(stats: &ProbeFrameStats) -> String {
 }
 
 fn diff_metrics_json(metrics: &ProbeDiffMetrics) -> String {
+    let bbox_delta = metrics
+        .bbox_delta
+        .as_ref()
+        .map(bbox_delta_json)
+        .unwrap_or_else(|| "null".to_string());
     format!(
         concat!(
             "{{",
@@ -1288,6 +1736,12 @@ fn diff_metrics_json(metrics: &ProbeDiffMetrics) -> String {
             "\"sum_abs_r\":{},",
             "\"sum_abs_g\":{},",
             "\"sum_abs_b\":{},",
+            "\"reference_nonblack_pixels\":{},",
+            "\"candidate_nonblack_pixels\":{},",
+            "\"nonblack_delta\":{},",
+            "\"bbox_delta\":{},",
+            "\"centroid_delta\":{},",
+            "\"best_translation\":{},",
             "\"classification\":\"{}\"",
             "}}"
         ),
@@ -1301,8 +1755,290 @@ fn diff_metrics_json(metrics: &ProbeDiffMetrics) -> String {
         metrics.sum_abs_r,
         metrics.sum_abs_g,
         metrics.sum_abs_b,
+        metrics.reference_nonblack_pixels,
+        metrics.candidate_nonblack_pixels,
+        metrics.nonblack_delta,
+        bbox_delta,
+        centroid_delta_json(&metrics.centroid_delta),
+        translation_alignment_json(&metrics.best_translation),
         metrics.classification
     )
+}
+
+fn optional_path_json(path: Option<&Path>) -> String {
+    match path {
+        Some(path) => format!("\"{}\"", json_escape(&display_path(path))),
+        None => "null".to_string(),
+    }
+}
+
+fn bbox_delta_json(delta: &ProbeSignedBoundingBoxDelta) -> String {
+    format!(
+        "{{\"min_x\":{},\"min_y\":{},\"max_x\":{},\"max_y\":{}}}",
+        delta.min_x, delta.min_y, delta.max_x, delta.max_y
+    )
+}
+
+fn point_json(point: &ProbePointF64) -> String {
+    format!("{{\"x\":{:.6},\"y\":{:.6}}}", point.x, point.y)
+}
+
+fn optional_f64_json(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.6}"))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn centroid_delta_json(delta: &ProbeCentroidDelta) -> String {
+    let reference = delta
+        .reference
+        .as_ref()
+        .map(point_json)
+        .unwrap_or_else(|| "null".to_string());
+    let candidate = delta
+        .candidate
+        .as_ref()
+        .map(point_json)
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        "{{\"reference\":{},\"candidate\":{},\"dx\":{},\"dy\":{}}}",
+        reference,
+        candidate,
+        optional_f64_json(delta.dx),
+        optional_f64_json(delta.dy)
+    )
+}
+
+fn translation_alignment_json(metrics: &ProbeTranslationAlignmentMetrics) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"dx\":{},",
+            "\"dy\":{},",
+            "\"overlap_pixels\":{},",
+            "\"mean_abs\":{:.6},",
+            "\"max_abs\":{},",
+            "\"mismatch_pixels\":{},",
+            "\"mismatch_ratio\":{:.6}",
+            "}}"
+        ),
+        metrics.dx,
+        metrics.dy,
+        metrics.overlap_pixels,
+        metrics.mean_abs,
+        metrics.max_abs,
+        metrics.mismatch_pixels,
+        metrics.mismatch_ratio
+    )
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+fn backend_timing_json(timing: &ProbeBackendTiming) -> String {
+    let avg_render_ms = if timing.frames == 0 {
+        0.0
+    } else {
+        timing.render_ms / timing.frames as f64
+    };
+    format!(
+        concat!(
+            "{{",
+            "\"frames\":{},",
+            "\"warmup_frames\":{},",
+            "\"warmup_ms\":{:.6},",
+            "\"render_ms\":{:.6},",
+            "\"render_avg_ms\":{:.6},",
+            "\"readback_normalize_ms\":{:.6},",
+            "\"artifact_write_ms\":{:.6}",
+            "}}"
+        ),
+        timing.frames,
+        timing.warmup_frames,
+        timing.warmup_ms,
+        timing.render_ms,
+        avg_render_ms,
+        timing.readback_normalize_ms,
+        timing.artifact_write_ms
+    )
+}
+
+fn probe_timing_summary_json(timing: &ProbeTimingSummary) -> String {
+    let cpu = timing
+        .cpu
+        .as_ref()
+        .map(backend_timing_json)
+        .unwrap_or_else(|| "null".to_string());
+    let metal = timing
+        .metal
+        .as_ref()
+        .map(backend_timing_json)
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        concat!(
+            "{{",
+            "\"cpu\":{},",
+            "\"metal\":{},",
+            "\"diff_artifact_ms\":{:.6},",
+            "\"manifest_artifact_ms\":{:.6}",
+            "}}"
+        ),
+        cpu, metal, timing.diff_artifact_ms, timing.manifest_artifact_ms
+    )
+}
+
+fn write_timing_json(path: &Path, timing: &ProbeTimingSummary) -> io::Result<()> {
+    fs::write(path, format!("{}\n", probe_timing_summary_json(timing)))
+}
+
+fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"tile_count_x\":{},",
+            "\"tile_count_y\":{},",
+            "\"num_tiles\":{},",
+            "\"tile_capacity\":{},",
+            "\"sort_capacity_before\":{},",
+            "\"sort_capacity_after\":{},",
+            "\"previous_total_overlaps\":{},",
+            "\"actual_total_overlaps\":{},",
+            "\"valid_count\":{},",
+            "\"retry_count\":{},",
+            "\"overflow_flag\":{}",
+            "}}"
+        ),
+        telemetry.tile_count_x,
+        telemetry.tile_count_y,
+        telemetry.num_tiles,
+        telemetry.tile_capacity,
+        telemetry.sort_capacity_before,
+        telemetry.sort_capacity_after,
+        telemetry.previous_total_overlaps,
+        telemetry.actual_total_overlaps,
+        telemetry.valid_count,
+        telemetry.retry_count,
+        telemetry.overflow_flag
+    )
+}
+
+#[cfg(feature = "metal")]
+fn write_metal_stage_telemetry_json(
+    path: &Path,
+    telemetry: &ProbeMetalStageTelemetry,
+) -> io::Result<()> {
+    fs::write(path, format!("{}\n", metal_stage_telemetry_json(telemetry)))
+}
+
+fn projected_splat_telemetry_json(telemetry: &ProbeProjectedSplatTelemetry) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"original_index\":{},",
+            "\"screen_center\":{{\"x\":{:.6},\"y\":{:.6}}},",
+            "\"depth\":{:.6},",
+            "\"radius\":{{\"x\":{:.6},\"y\":{:.6}}},",
+            "\"bbox\":{{\"min_x\":{},\"min_y\":{},\"max_x\":{},\"max_y\":{}}},",
+            "\"tile_bounds\":{{\"min_x\":{},\"min_y\":{},\"max_x\":{},\"max_y\":{}}},",
+            "\"opacity\":{:.6},",
+            "\"color\":[{},{},{}]",
+            "}}"
+        ),
+        telemetry.original_index,
+        telemetry.screen_x,
+        telemetry.screen_y,
+        telemetry.depth,
+        telemetry.radius_x,
+        telemetry.radius_y,
+        telemetry.bbox.min_x,
+        telemetry.bbox.min_y,
+        telemetry.bbox.max_x,
+        telemetry.bbox.max_y,
+        telemetry.tile_bounds.min_x,
+        telemetry.tile_bounds.min_y,
+        telemetry.tile_bounds.max_x,
+        telemetry.tile_bounds.max_y,
+        telemetry.opacity,
+        telemetry.color[0],
+        telemetry.color[1],
+        telemetry.color[2]
+    )
+}
+
+fn projected_splat_telemetry(
+    splat: &ProjectedSplat,
+    width: usize,
+    height: usize,
+) -> ProbeProjectedSplatTelemetry {
+    let max_x = width.saturating_sub(1);
+    let max_y = height.saturating_sub(1);
+    let min_x = (splat.screen_x - splat.radius_x).floor().max(0.0) as usize;
+    let min_y = (splat.screen_y - splat.radius_y).floor().max(0.0) as usize;
+    let bbox_max_x = (splat.screen_x + splat.radius_x).ceil().max(0.0) as usize;
+    let bbox_max_y = (splat.screen_y + splat.radius_y).ceil().max(0.0) as usize;
+    let bbox = ProbeBoundingBox {
+        min_x: min_x.min(max_x),
+        min_y: min_y.min(max_y),
+        max_x: bbox_max_x.min(max_x),
+        max_y: bbox_max_y.min(max_y),
+    };
+    let tile_bounds = ProbeTileBounds {
+        min_x: bbox.min_x / PROBE_TILE_SIZE,
+        min_y: bbox.min_y / PROBE_TILE_SIZE,
+        max_x: bbox.max_x / PROBE_TILE_SIZE,
+        max_y: bbox.max_y / PROBE_TILE_SIZE,
+    };
+
+    ProbeProjectedSplatTelemetry {
+        original_index: splat.original_index,
+        screen_x: splat.screen_x,
+        screen_y: splat.screen_y,
+        depth: splat.depth,
+        radius_x: splat.radius_x,
+        radius_y: splat.radius_y,
+        bbox,
+        tile_bounds,
+        opacity: splat.opacity,
+        color: splat.color,
+    }
+}
+
+fn write_cpu_stage_telemetry_json(
+    path: &Path,
+    input_splat_count: usize,
+    width: usize,
+    height: usize,
+    projected_splats: &[ProjectedSplat],
+) -> io::Result<()> {
+    let splats_json = projected_splats
+        .iter()
+        .map(|splat| {
+            projected_splat_telemetry_json(&projected_splat_telemetry(splat, width, height))
+        })
+        .collect::<Vec<_>>()
+        .join(",\n    ");
+    let json = format!(
+        concat!(
+            "{{\n",
+            "  \"source\": \"cpu_project_and_cull_splats\",\n",
+            "  \"input_splat_count\": {},\n",
+            "  \"projected_splat_count\": {},\n",
+            "  \"sorted_by_depth\": true,\n",
+            "  \"width\": {},\n",
+            "  \"height\": {},\n",
+            "  \"tile_size\": {},\n",
+            "  \"splats\": [\n    {}\n  ]\n",
+            "}}\n"
+        ),
+        input_splat_count,
+        projected_splats.len(),
+        width,
+        height,
+        PROBE_TILE_SIZE,
+        splats_json
+    );
+    fs::write(path, json)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1406,7 +2142,8 @@ fn classification_rank(classification: ProbeDiffClassification) -> u8 {
         ProbeDiffClassification::Pass => 0,
         ProbeDiffClassification::ChannelSwap => 1,
         ProbeDiffClassification::Blank => 2,
-        ProbeDiffClassification::Mismatch => 3,
+        ProbeDiffClassification::GlobalShift => 3,
+        ProbeDiffClassification::StructuredMismatch => 4,
     }
 }
 
@@ -1432,7 +2169,16 @@ fn classify_diff(
         return ProbeDiffClassification::ChannelSwap;
     }
 
-    ProbeDiffClassification::Mismatch
+    let best = &metrics.best_translation;
+    let best_is_shift = best.dx != 0 || best.dy != 0;
+    let strongly_improved = best.mismatch_ratio <= metrics.mismatch_ratio * 0.25
+        || (metrics.mismatch_ratio - best.mismatch_ratio) >= 0.20;
+    let low_residual = best.mismatch_ratio <= 0.05 || best.mean_abs <= metrics.mean_abs * 0.20;
+    if best_is_shift && strongly_improved && low_residual {
+        return ProbeDiffClassification::GlobalShift;
+    }
+
+    ProbeDiffClassification::StructuredMismatch
 }
 
 fn count_nonblack(frame: &[[u8; 3]]) -> usize {
@@ -1737,7 +2483,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_diff_metrics_classify_pass_mismatch_blank_and_channel_swap() {
+    fn probe_diff_metrics_classify_pass_structured_blank_and_channel_swap() {
         let reference = vec![[10, 20, 30], [0, 0, 0], [200, 10, 5], [1, 2, 3]];
 
         let pass = compute_diff_metrics(&reference, &reference, 2, 2);
@@ -1748,12 +2494,21 @@ mod tests {
 
         let mismatch_candidate = vec![[10, 20, 30], [0, 1, 0], [190, 11, 5], [1, 2, 3]];
         let mismatch = compute_diff_metrics(&reference, &mismatch_candidate, 2, 2);
-        assert_eq!(mismatch.classification, ProbeDiffClassification::Mismatch);
+        assert_eq!(
+            mismatch.classification,
+            ProbeDiffClassification::StructuredMismatch
+        );
         assert_eq!(mismatch.max_abs, 10);
         assert_eq!(mismatch.mismatch_pixels, 2);
         assert_eq!(mismatch.sum_abs_r, 10);
         assert_eq!(mismatch.sum_abs_g, 2);
         assert_eq!(mismatch.sum_abs_b, 0);
+        assert_eq!(mismatch.reference_nonblack_pixels, 3);
+        assert_eq!(mismatch.candidate_nonblack_pixels, 4);
+        assert_eq!(mismatch.nonblack_delta, 1);
+        assert!(mismatch.bbox_delta.is_some());
+        assert_eq!(mismatch.best_translation.dx, 0);
+        assert_eq!(mismatch.best_translation.dy, 0);
 
         let blank_candidate = vec![[0, 0, 0]; 4];
         let blank = compute_diff_metrics(&reference, &blank_candidate, 2, 2);
@@ -1765,6 +2520,25 @@ mod tests {
             .collect::<Vec<_>>();
         let swapped = compute_diff_metrics(&reference, &swapped_candidate, 2, 2);
         assert_eq!(swapped.classification, ProbeDiffClassification::ChannelSwap);
+    }
+
+    #[test]
+    fn probe_diff_metrics_detect_global_shift_and_centroid_delta() {
+        let mut reference = vec![[0, 0, 0]; 15];
+        let mut candidate = vec![[0, 0, 0]; 15];
+        reference[1 + 5] = [240, 10, 20];
+        candidate[2 + 5] = [240, 10, 20];
+
+        let metrics = compute_diff_metrics(&reference, &candidate, 5, 3);
+
+        assert_eq!(metrics.classification, ProbeDiffClassification::GlobalShift);
+        assert_eq!(metrics.nonblack_delta, 0);
+        assert_eq!(metrics.bbox_delta.as_ref().unwrap().min_x, 1);
+        assert_eq!(metrics.centroid_delta.dx.unwrap(), 1.0);
+        assert_eq!(metrics.centroid_delta.dy.unwrap(), 0.0);
+        assert_eq!(metrics.best_translation.dx, 1);
+        assert_eq!(metrics.best_translation.dy, 0);
+        assert_eq!(metrics.best_translation.mismatch_pixels, 0);
     }
 
     #[test]
@@ -1802,7 +2576,7 @@ mod tests {
         let summary = fs::read_to_string(summary_path).unwrap();
         assert!(summary.contains("\"comparison\": \"cpu_vs_metal\""));
         assert!(summary.contains("\"mean_abs\""));
-        assert!(summary.contains("\"classification\":\"mismatch\""));
+        assert!(summary.contains("\"classification\":\"structured_mismatch\""));
 
         let _ = fs::remove_dir_all(out_dir);
     }
@@ -1872,6 +2646,39 @@ mod tests {
         let manifest = fs::read_to_string(&result.manifest_path).unwrap();
         assert!(manifest.contains("\"frames\": 2"));
         assert!(manifest.contains("\"warmup_frames\": 1"));
+
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[test]
+    fn probe_run_writes_cpu_stage_telemetry_and_timing_when_requested() {
+        let out_dir = unique_temp_dir("probe_run_stage_timing");
+        let mut config = ProbeConfig::new(&out_dir);
+        config.width = 24;
+        config.height = 16;
+        config.case = ProbeCase::Channels;
+        config.stage_telemetry = true;
+        config.timing = true;
+
+        let result = run_probe(&config, &[]).unwrap();
+
+        let stage_path = result.cpu_frames[0]
+            .stage_telemetry_path
+            .as_ref()
+            .expect("stage telemetry path");
+        assert!(stage_path.exists());
+        assert!(result.timing_path.as_ref().unwrap().exists());
+        assert!(result.timing.as_ref().unwrap().cpu.is_some());
+
+        let stage = fs::read_to_string(stage_path).unwrap();
+        assert!(stage.contains("\"source\": \"cpu_project_and_cull_splats\""));
+        assert!(stage.contains("\"original_index\""));
+        assert!(stage.contains("\"tile_bounds\""));
+
+        let manifest = fs::read_to_string(&result.manifest_path).unwrap();
+        assert!(manifest.contains("\"stage_telemetry\": true"));
+        assert!(manifest.contains("\"timing_enabled\": true"));
+        assert!(manifest.contains("probe_timing.json"));
 
         let _ = fs::remove_dir_all(out_dir);
     }

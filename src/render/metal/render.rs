@@ -45,11 +45,23 @@ impl MetalBackend {
             }
             let num_tiles = usize::try_from(num_tiles_u64)?;
 
+            self.last_tile_count_x = tile_count_x;
+            self.last_tile_count_y = tile_count_y;
+            self.last_num_tiles = num_tiles;
+            self.last_sort_capacity_before = self.sort_capacity;
+            self.last_sort_capacity_after = self.sort_capacity;
+            self.last_previous_total_overlaps = self.previous_total_overlaps;
+            self.last_actual_total_overlaps = 0;
+            self.last_valid_count = 0;
+            self.last_retry_count = 0;
+            self.last_overflow_flag = 0;
+
             self.ensure_framebuffer_capacity(screen_width, screen_height)?;
             if splat_count == 0 {
                 self.clear_framebuffer(screen_width, screen_height);
                 self.last_render_width = screen_width;
                 self.last_render_height = screen_height;
+                self.last_sort_capacity_after = self.sort_capacity;
                 return Ok(());
             }
             self.ensure_tile_capacity(num_tiles)?;
@@ -75,14 +87,21 @@ impl MetalBackend {
                 )?;
 
                 self.previous_total_overlaps = result.total_overlaps;
+                self.last_actual_total_overlaps = result.total_overlaps;
+                self.last_valid_count = result.valid_count;
+                self.last_retry_count = attempt;
+                self.last_overflow_flag = result.overflow_flag;
                 if result.overflow_flag == 0 {
                     self.maybe_shrink_sort_capacity(result.total_overlaps as usize)?;
+                    self.last_sort_capacity_after = self.sort_capacity;
                     break;
                 }
 
                 if attempt >= 1 {
                     let growth_target = (result.total_overlaps as usize).saturating_mul(2).max(1);
                     self.ensure_sort_capacity(growth_target)?;
+                    self.last_retry_count = attempt + 1;
+                    self.last_sort_capacity_after = self.sort_capacity;
                     return Err(MetalRenderError::OverflowDeferred {
                         requested_capacity: growth_target,
                         overlaps: result.total_overlaps,
