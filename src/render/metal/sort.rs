@@ -7,6 +7,8 @@ use super::types::{RADIX_BUCKETS, THREADS_PER_GROUP_1D};
 use super::MetalBackend;
 
 pub(super) const RADIX_SORT_BIT_OFFSETS: [u32; 8] = [0u32, 8, 16, 24, 32, 40, 48, 56];
+pub(super) const MAX_LOCAL_TILE_SORT: u32 = 2048;
+const LOCAL_TILE_SORT_THREADS: u32 = 256;
 
 pub fn div_ceil_u32(value: u32, divisor: u32) -> u32 {
     value.div_ceil(divisor)
@@ -184,5 +186,29 @@ impl MetalBackend {
         }
 
         Ok(())
+    }
+
+    pub(super) fn encode_local_tile_sort(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        num_tiles: u32,
+    ) {
+        if num_tiles == 0 {
+            return;
+        }
+
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&self.local_tile_sort_pipeline);
+        encoder.set_buffer(0, Some(&self.tile_offsets), 0);
+        encoder.set_buffer(1, Some(&self.sort_keys_a), 0);
+        encoder.set_buffer(2, Some(&self.sort_values_a), 0);
+        encoder.set_buffer(3, Some(&self.sort_keys_b), 0);
+        encoder.set_buffer(4, Some(&self.sort_values_b), 0);
+        encoder.set_buffer(5, Some(&self.overflow_flag_buffer), 0);
+        encoder.dispatch_thread_groups(
+            MTLSize::new(u64::from(num_tiles), 1, 1),
+            MTLSize::new(u64::from(LOCAL_TILE_SORT_THREADS), 1, 1),
+        );
+        encoder.end_encoding();
     }
 }

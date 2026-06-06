@@ -50,6 +50,8 @@ impl MetalBackend {
             create_pipeline(&device, &tile_ops_library, "count_tile_overlaps")?;
         let emit_tile_keys_pipeline =
             create_pipeline(&device, &tile_ops_library, "emit_tile_keys")?;
+        let local_tile_sort_pipeline =
+            create_pipeline(&device, &tile_ops_library, "local_tile_sort")?;
         let rasterize_tiles_pipeline =
             create_pipeline(&device, &tile_rasterize_library, "rasterize_tiles")?;
 
@@ -76,6 +78,7 @@ impl MetalBackend {
         let framebuffer = new_shared_buffer(&device, mem::size_of::<u32>());
         let tile_counts = new_private_buffer(&device, mem::size_of::<u32>());
         let tile_offsets = new_private_buffer(&device, mem::size_of::<u32>() * 2);
+        let tile_offsets_readback = new_shared_buffer(&device, mem::size_of::<u32>() * 2);
         let tile_counters = new_private_buffer(&device, mem::size_of::<u32>());
         let sort_keys_a = new_private_buffer(&device, mem::size_of::<u64>());
         let sort_keys_b = new_private_buffer(&device, mem::size_of::<u64>());
@@ -94,6 +97,7 @@ impl MetalBackend {
             radix_sort_scatter_pipeline,
             count_tile_overlaps_pipeline,
             emit_tile_keys_pipeline,
+            local_tile_sort_pipeline,
             rasterize_tiles_pipeline,
             splat_buffer,
             camera_buffer,
@@ -104,6 +108,7 @@ impl MetalBackend {
             projected_buffer,
             tile_counts,
             tile_offsets,
+            tile_offsets_readback,
             tile_counters,
             sort_keys_a,
             sort_keys_b,

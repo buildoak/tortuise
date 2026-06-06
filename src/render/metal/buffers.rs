@@ -38,6 +38,8 @@ impl MetalBackend {
 
         self.tile_counts = new_private_buffer(&self.device, bytes_for_u32_elems(num_tiles)?);
         self.tile_offsets = new_private_buffer(&self.device, bytes_for_u32_elems(num_tiles + 1)?);
+        self.tile_offsets_readback =
+            new_shared_buffer(&self.device, bytes_for_u32_elems(num_tiles + 1)?);
         self.tile_counters = new_private_buffer(&self.device, bytes_for_u32_elems(num_tiles)?);
         self.tile_capacity = num_tiles;
         Ok(())

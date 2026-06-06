@@ -2,6 +2,7 @@
 using namespace metal;
 
 #define TILE_SIZE 16
+#define MAX_LOCAL_TILE_SORT 2048u
 
 struct ProjectedSplat {
     float screen_x, screen_y, depth;
@@ -140,5 +141,79 @@ kernel void emit_tile_keys(
                 uint64_t(index_key);
             sort_values[slot] = index;
         }
+    }
+}
+
+kernel void local_tile_sort(
+    constant uint* tile_offsets [[buffer(0)]],
+    constant uint64_t* sort_keys_in [[buffer(1)]],
+    constant uint* sort_values_in [[buffer(2)]],
+    device uint64_t* sort_keys_out [[buffer(3)]],
+    device uint* sort_values_out [[buffer(4)]],
+    device atomic_uint* overflow_flag [[buffer(5)]],
+    uint tile_id [[threadgroup_position_in_grid]],
+    uint ltid [[thread_position_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]
+) {
+    const uint start = tile_offsets[tile_id];
+    const uint end = tile_offsets[tile_id + 1u];
+    const uint count = end - start;
+    if (count > MAX_LOCAL_TILE_SORT) {
+        if (ltid == 0u) {
+            atomic_store_explicit(overflow_flag, 1u, memory_order_relaxed);
+        }
+        return;
+    }
+    if (count == 0u) {
+        return;
+    }
+
+    uint sort_len = 1u;
+    while (sort_len < count) {
+        sort_len <<= 1u;
+    }
+
+    threadgroup uint64_t keys[MAX_LOCAL_TILE_SORT];
+    threadgroup uint values[MAX_LOCAL_TILE_SORT];
+
+    for (uint i = ltid; i < sort_len; i += threads_per_group) {
+        if (i < count) {
+            keys[i] = sort_keys_in[start + i];
+            values[i] = sort_values_in[start + i];
+        } else {
+            keys[i] = ~uint64_t(0);
+            values[i] = 0u;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint k = 2u; k <= sort_len; k <<= 1u) {
+        for (uint j = k >> 1u; j > 0u; j >>= 1u) {
+            for (uint i = ltid; i < sort_len; i += threads_per_group) {
+                const uint ixj = i ^ j;
+                if (ixj > i) {
+                    const bool ascending = (i & k) == 0u;
+                    const uint64_t key_i = keys[i];
+                    const uint64_t key_j = keys[ixj];
+                    const bool swap_pair =
+                        (ascending && key_i > key_j) ||
+                        (!ascending && key_i < key_j);
+
+                    if (swap_pair) {
+                        const uint value_i = values[i];
+                        keys[i] = key_j;
+                        values[i] = values[ixj];
+                        keys[ixj] = key_i;
+                        values[ixj] = value_i;
+                    }
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+
+    for (uint i = ltid; i < count; i += threads_per_group) {
+        sort_keys_out[start + i] = keys[i];
+        sort_values_out[start + i] = values[i];
     }
 }

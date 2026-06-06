@@ -10,7 +10,7 @@ use crate::camera::Camera;
 
 use super::error::MetalRenderError;
 use super::pipeline::{read_shared_u32, set_bytes_u32, write_shared_struct};
-use super::sort::{dispatch_1d, div_ceil_u32, RADIX_SORT_BIT_OFFSETS};
+use super::sort::{dispatch_1d, div_ceil_u32, MAX_LOCAL_TILE_SORT, RADIX_SORT_BIT_OFFSETS};
 use super::sync::commit_and_wait_or_disable_gpu;
 use super::types::{
     GpuCameraData, TileConfig, RADIX_BUCKETS, SHADER_TILE_SIZE, THREADS_PER_GROUP_1D, TILE_SIZE,
@@ -78,6 +78,7 @@ pub(super) fn run_single_render_attempt(
     write_shared_struct(&backend.tile_config_buffer, &tile_config);
 
     let tile_bytes = super::buffers::bytes_for_u32_elems(num_tiles)? as u64;
+    let tile_offsets_bytes = super::buffers::bytes_for_u32_elems(num_tiles + 1)? as u64;
     let splat_count_u32 = u32::try_from(splat_count)?;
     let framebuffer_pixels = screen_width
         .checked_mul(screen_height)
@@ -158,6 +159,15 @@ pub(super) fn run_single_render_attempt(
     blit.end_encoding();
 
     backend.encode_prefix_scan_in_place(stage_a, &backend.tile_offsets, 0, num_tiles as u32)?;
+    let blit = stage_a.new_blit_command_encoder();
+    blit.copy_from_buffer(
+        &backend.tile_offsets,
+        0,
+        &backend.tile_offsets_readback,
+        0,
+        tile_offsets_bytes,
+    );
+    blit.end_encoding();
     let stage_a_encode_ms = stage_a_encode_started.map(|started| duration_ms(started.elapsed()));
     let stage_a_wait_started = stage_timing_enabled.then(Instant::now);
     let stage_a_result = commit_and_wait_or_disable_gpu(
@@ -204,11 +214,14 @@ pub(super) fn run_single_render_attempt(
         });
     }
 
+    let max_tile_range = read_max_tile_range(&backend.tile_offsets_readback, num_tiles)?;
+    let use_local_tile_sort = max_tile_range <= MAX_LOCAL_TILE_SORT;
+
     let dispatch_overlaps = total_overlaps;
     let mut sort_num_blocks = 0u32;
     let mut histogram_count = 0u32;
 
-    if dispatch_overlaps > 0 {
+    if dispatch_overlaps > 0 && !use_local_tile_sort {
         sort_num_blocks = div_ceil_u32(dispatch_overlaps, THREADS_PER_GROUP_1D);
         histogram_count = sort_num_blocks
             .checked_mul(RADIX_BUCKETS)
@@ -220,6 +233,8 @@ pub(super) fn run_single_render_attempt(
     let stage_b_encode_started = stage_timing_enabled.then(Instant::now);
     let stage_b = backend.command_queue.new_command_buffer();
     let mut keys_in_a = true;
+    let mut radix_passes = 0usize;
+    let mut local_tile_sort_used = false;
 
     let encoder = stage_b.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&backend.emit_tile_keys_pipeline);
@@ -236,12 +251,19 @@ pub(super) fn run_single_render_attempt(
     encoder.end_encoding();
 
     if dispatch_overlaps > 0 {
-        backend.run_radix_sort_passes(stage_b, dispatch_overlaps, &mut keys_in_a)?;
-
-        let (sorted_keys, sorted_values) = if keys_in_a {
-            (&backend.sort_keys_a, &backend.sort_values_a)
-        } else {
+        let (sorted_keys, sorted_values) = if use_local_tile_sort {
+            backend.encode_local_tile_sort(stage_b, num_tiles as u32);
+            local_tile_sort_used = true;
             (&backend.sort_keys_b, &backend.sort_values_b)
+        } else {
+            backend.run_radix_sort_passes(stage_b, dispatch_overlaps, &mut keys_in_a)?;
+            radix_passes = RADIX_SORT_BIT_OFFSETS.len();
+            let (keys, values) = if keys_in_a {
+                (&backend.sort_keys_a, &backend.sort_values_a)
+            } else {
+                (&backend.sort_keys_b, &backend.sort_values_b)
+            };
+            (keys, values)
         };
 
         let encoder = stage_b.new_compute_command_encoder();
@@ -285,7 +307,10 @@ pub(super) fn run_single_render_attempt(
                 "\"sort_capacity\":{},",
                 "\"sort_num_blocks\":{},",
                 "\"radix_histogram_count\":{},",
-                "\"radix_passes\":{}",
+                "\"radix_passes\":{},",
+                "\"local_tile_sort\":{},",
+                "\"max_tile_range\":{},",
+                "\"max_local_tile_sort\":{}",
                 "}}"
             ),
             stage_b_result.is_ok(),
@@ -296,11 +321,10 @@ pub(super) fn run_single_render_attempt(
             sort_capacity_u32,
             sort_num_blocks,
             histogram_count,
-            if dispatch_overlaps > 0 {
-                RADIX_SORT_BIT_OFFSETS.len()
-            } else {
-                0
-            }
+            radix_passes,
+            local_tile_sort_used,
+            max_tile_range,
+            MAX_LOCAL_TILE_SORT
         );
     }
     stage_b_result?;
@@ -320,4 +344,30 @@ fn duration_ms(duration: Duration) -> f64 {
 
 fn metal_stage_timing_enabled() -> bool {
     std::env::var_os(METAL_STAGE_TIMING_ENV).is_some()
+}
+
+fn read_max_tile_range(
+    tile_offsets_readback: &metal::Buffer,
+    num_tiles: usize,
+) -> Result<u32, MetalRenderError> {
+    if num_tiles == 0 {
+        return Ok(0);
+    }
+
+    let offsets = unsafe {
+        std::slice::from_raw_parts(
+            tile_offsets_readback.contents() as *const u32,
+            num_tiles + 1,
+        )
+    };
+    let mut max_range = 0u32;
+    for window in offsets.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let count = end.checked_sub(start).ok_or_else(|| {
+            MetalRenderError::Other("Metal tile offsets were not monotonic after scan".to_string())
+        })?;
+        max_range = max_range.max(count);
+    }
+    Ok(max_range)
 }

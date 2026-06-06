@@ -39,6 +39,7 @@ pub struct MetalBackend {
     pub(super) radix_sort_scatter_pipeline: ComputePipelineState,
     pub(super) count_tile_overlaps_pipeline: ComputePipelineState,
     pub(super) emit_tile_keys_pipeline: ComputePipelineState,
+    pub(super) local_tile_sort_pipeline: ComputePipelineState,
     pub(super) rasterize_tiles_pipeline: ComputePipelineState,
 
     pub(super) splat_buffer: Buffer,
@@ -51,6 +52,7 @@ pub struct MetalBackend {
     pub(super) projected_buffer: Buffer,
     pub(super) tile_counts: Buffer,
     pub(super) tile_offsets: Buffer,
+    pub(super) tile_offsets_readback: Buffer,
     pub(super) tile_counters: Buffer,
     pub(super) sort_keys_a: Buffer,
     pub(super) sort_keys_b: Buffer,
