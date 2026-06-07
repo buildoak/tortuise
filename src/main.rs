@@ -165,6 +165,12 @@ struct Cli {
         help = "Supersampling factor"
     )]
     supersample: u32,
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Deterministically keep at most N evenly spaced splats for active-set/LoD experiments"
+    )]
+    splat_budget: Option<usize>,
 }
 
 fn find_luigi_ply() -> Option<PathBuf> {
@@ -186,42 +192,72 @@ fn find_luigi_ply() -> Option<PathBuf> {
 }
 
 fn load_splats_from_cli(cli: &Cli) -> AppResult<Vec<splat::Splat>> {
-    if cli.demo {
+    let mut splats = if cli.demo {
         // Try to load luigi.ply; fall back to procedural demo if not found
         if let Some(luigi_path) = find_luigi_ply() {
             let path_str = luigi_path.to_str().ok_or("luigi.ply path is non-UTF-8")?;
-            return parser::ply::load_ply_file(path_str);
+            parser::ply::load_ply_file(path_str)?
+        } else {
+            demo::generate_demo_splats()
         }
-        return Ok(demo::generate_demo_splats());
+    } else {
+        let path = cli
+            .input
+            .as_ref()
+            .expect("input is Some; checked before dispatch");
+
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let path_str = path.to_str().ok_or_else(|| {
+            format!(
+                "Input path contains non-UTF-8 characters: {}",
+                path.display()
+            )
+        })?;
+
+        match ext.as_str() {
+            "ply" => parser::ply::load_ply_file(path_str)?,
+            "splat" => parser::dot_splat::load_splat_file(path_str)?,
+            _ => {
+                return Err(format!(
+                    "Unsupported input '{}'. Use a .ply, .splat, or --demo",
+                    path.display()
+                )
+                .into());
+            }
+        }
+    };
+
+    apply_splat_budget(&mut splats, cli.splat_budget)?;
+    Ok(splats)
+}
+
+fn apply_splat_budget(splats: &mut Vec<splat::Splat>, budget: Option<usize>) -> AppResult<()> {
+    let Some(budget) = budget else {
+        return Ok(());
+    };
+    if budget == 0 {
+        return Err("--splat-budget must be greater than 0".into());
+    }
+    let len = splats.len();
+    if len <= budget {
+        return Ok(());
     }
 
-    let path = cli
-        .input
-        .as_ref()
-        .expect("input is Some; checked before dispatch");
-
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-
-    let path_str = path.to_str().ok_or_else(|| {
-        format!(
-            "Input path contains non-UTF-8 characters: {}",
-            path.display()
-        )
-    })?;
-
-    match ext.as_str() {
-        "ply" => parser::ply::load_ply_file(path_str),
-        "splat" => parser::dot_splat::load_splat_file(path_str),
-        _ => Err(format!(
-            "Unsupported input '{}'. Use a .ply, .splat, or --demo",
-            path.display()
-        )
-        .into()),
+    let mut selected = Vec::with_capacity(budget);
+    for out_idx in 0..budget {
+        let src_idx = out_idx
+            .checked_mul(len)
+            .ok_or("--splat-budget index calculation overflowed")?
+            / budget;
+        selected.push(splats[src_idx].clone());
     }
+    *splats = selected;
+    Ok(())
 }
 
 fn parse_probe_size(raw: &str) -> AppResult<(usize, usize)> {
@@ -656,6 +692,24 @@ mod tests {
         assert!(err.to_string().contains("--probe-inspect-scale"));
         validate_probe_inspect_scale(1).unwrap();
         validate_probe_inspect_scale(4).unwrap();
+    }
+
+    #[test]
+    fn splat_budget_keeps_evenly_spaced_subset() {
+        let mut splats = demo::generate_demo_splats();
+        let original_len = splats.len();
+        apply_splat_budget(&mut splats, Some(3)).unwrap();
+
+        assert_eq!(splats.len(), 3);
+        assert!(original_len > splats.len());
+    }
+
+    #[test]
+    fn splat_budget_rejects_zero() {
+        let mut splats = demo::generate_demo_splats();
+        let err = apply_splat_budget(&mut splats, Some(0)).unwrap_err();
+
+        assert!(err.to_string().contains("--splat-budget"));
     }
 
     #[cfg(feature = "metal")]

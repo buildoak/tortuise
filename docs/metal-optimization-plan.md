@@ -179,6 +179,13 @@ Implemented first fast tier:
 - `--metal-quality turbo` is the aggressive unsorted diagnostic tier.
 - `TORTUISE_METAL_FAST_ALPHA_CUTOFF` tunes the fast-preview peak alpha cutoff;
   the default is `0.01`.
+- `TORTUISE_METAL_FAST_TILE_BUDGET` caps front-to-back raster work per tile in
+  fast-preview; the default is `16384`. This is the first budgeted-compositor
+  primitive and must stay approximate-only.
+- `--splat-budget N` deterministically keeps at most `N` evenly spaced source
+  splats before upload/render. This is active-set/LoD groundwork rather than a
+  finished quality LoD, but it lets benchmarks test fixed-budget behavior on
+  the same camera packs.
 
 Gate:
 

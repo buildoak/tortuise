@@ -34,6 +34,7 @@ kernel void rasterize_tiles(
     constant uint& sort_capacity [[buffer(6)]],
     device atomic_uint* overflow_flag [[buffer(7)]],
     constant uint& fast_quality [[buffer(8)]],
+    constant uint& fast_tile_budget [[buffer(9)]],
     uint2 threadgroup_pos [[threadgroup_position_in_grid]],
     uint2 local_pos [[thread_position_in_threadgroup]],
     uint linear_tid [[thread_index_in_threadgroup]])
@@ -95,7 +96,10 @@ kernel void rasterize_tiles(
     const float max_pixel_x = float(tile_config.screen_width - 1);
     const float max_pixel_y = float(tile_config.screen_height - 1);
 
-    const uint total_splats = range_end - range_start;
+    const uint raw_total_splats = range_end - range_start;
+    const uint total_splats = (fast_quality != 0u && fast_tile_budget > 0u)
+        ? min(raw_total_splats, fast_tile_budget)
+        : raw_total_splats;
     for (uint batch_offset = 0; batch_offset < total_splats; batch_offset += BATCH_SIZE) {
         const uint batch_count = min(uint(BATCH_SIZE), total_splats - batch_offset);
 

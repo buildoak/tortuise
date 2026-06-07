@@ -25,6 +25,7 @@ const METAL_FAST_UNSORTED_ENV: &str = "TORTUISE_METAL_FAST_UNSORTED";
 const METAL_FAST_APPROX_ENV: &str = "TORTUISE_METAL_FAST_APPROX";
 const METAL_FAST_DEPTH_BITS_ENV: &str = "TORTUISE_METAL_FAST_DEPTH_BITS";
 const METAL_FAST_ALPHA_CUTOFF_ENV: &str = "TORTUISE_METAL_FAST_ALPHA_CUTOFF";
+const METAL_FAST_TILE_BUDGET_ENV: &str = "TORTUISE_METAL_FAST_TILE_BUDGET";
 const METAL_QUALITY_ENV: &str = "TORTUISE_METAL_QUALITY";
 const METAL_SNUG_TILE_BOUNDS_ENV: &str = "TORTUISE_METAL_SNUG_TILE_BOUNDS";
 
@@ -119,6 +120,7 @@ fn run_single_render_attempt_fused(
     let fast_quality_enabled = sort_path.fast_quality_enabled();
     let approximate_depth_bits = metal_fast_depth_bits();
     let fast_alpha_cutoff = metal_fast_alpha_cutoff();
+    let fast_tile_budget = metal_fast_tile_budget(fast_quality_enabled);
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
@@ -363,6 +365,7 @@ fn run_single_render_attempt_fused(
     set_bytes_u32(encoder, 6, attempt_sort_count_u32);
     encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
     set_bytes_u32(encoder, 8, u32::from(fast_quality_enabled));
+    set_bytes_u32(encoder, 9, fast_tile_budget);
     debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
     encoder.dispatch_thread_groups(
         MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),
@@ -408,6 +411,7 @@ fn run_single_render_attempt_fused(
                 "\"fast_unsorted\":{},",
                 "\"fast_quality\":{},",
                 "\"fast_alpha_cutoff\":{:.6},",
+                "\"fast_tile_budget\":{},",
                 "\"snug_tile_bounds\":{}",
                 "}}"
             ),
@@ -423,6 +427,7 @@ fn run_single_render_attempt_fused(
             fast_unsorted_enabled,
             fast_quality_enabled,
             fast_alpha_cutoff,
+            fast_tile_budget,
             snug_tile_bounds_enabled
         );
     }
@@ -461,6 +466,7 @@ fn run_single_render_attempt_two_stage(
     let approximate_depth_enabled = sort_path.approximate_depth_enabled();
     let approximate_depth_bits = metal_fast_depth_bits();
     let fast_alpha_cutoff = metal_fast_alpha_cutoff();
+    let fast_tile_budget = metal_fast_tile_budget(fast_quality_enabled);
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
@@ -649,6 +655,7 @@ fn run_single_render_attempt_two_stage(
                 "\"tile_count_y\":{},",
                 "\"fast_quality\":{},",
                 "\"fast_alpha_cutoff\":{:.6},",
+                "\"fast_tile_budget\":{},",
                 "\"snug_tile_bounds\":{}",
                 "}}"
             ),
@@ -661,6 +668,7 @@ fn run_single_render_attempt_two_stage(
             tile_count_y,
             fast_quality_enabled,
             fast_alpha_cutoff,
+            fast_tile_budget,
             snug_tile_bounds_enabled
         );
     }
@@ -775,6 +783,7 @@ fn run_single_render_attempt_two_stage(
         set_bytes_u32(encoder, 6, dispatch_overlaps);
         encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
         set_bytes_u32(encoder, 8, u32::from(fast_quality_enabled));
+        set_bytes_u32(encoder, 9, fast_tile_budget);
         debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
         encoder.dispatch_thread_groups(
             MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),
@@ -821,6 +830,7 @@ fn run_single_render_attempt_two_stage(
                 "\"fast_unsorted\":{},",
                 "\"fast_quality\":{},",
                 "\"fast_alpha_cutoff\":{:.6},",
+                "\"fast_tile_budget\":{},",
                 "\"max_tile_range\":{},",
                 "\"total_tile_entries\":{},",
                 "\"p50_tile_range\":{},",
@@ -848,6 +858,7 @@ fn run_single_render_attempt_two_stage(
             fast_unsorted_enabled,
             fast_quality_enabled,
             fast_alpha_cutoff,
+            fast_tile_budget,
             max_tile_range,
             tile_density.total_tile_entries,
             tile_density.p50_tile_range,
@@ -950,6 +961,18 @@ fn metal_fast_alpha_cutoff() -> f32 {
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(0.01)
         .clamp(0.0001, 0.05)
+}
+
+fn metal_fast_tile_budget(fast_quality_enabled: bool) -> u32 {
+    if !fast_quality_enabled {
+        return 0;
+    }
+    std::env::var(METAL_FAST_TILE_BUDGET_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(16_384)
+        .clamp(256, 65_535)
 }
 
 fn set_bytes_f32(encoder: &metal::ComputeCommandEncoderRef, index: u64, value: f32) {
