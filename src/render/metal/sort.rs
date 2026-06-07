@@ -116,10 +116,10 @@ impl MetalBackend {
     pub(super) fn run_radix_sort_passes(
         &self,
         command_buffer: &metal::CommandBufferRef,
-        dispatch_overlaps: u32,
+        num_elements: u32,
         keys_in_a: &mut bool,
     ) -> Result<(), MetalRenderError> {
-        let num_blocks = div_ceil_u32(dispatch_overlaps.max(1), THREADS_PER_GROUP_1D).max(1);
+        let num_blocks = div_ceil_u32(num_elements.max(1), THREADS_PER_GROUP_1D).max(1);
         let histogram_count = num_blocks
             .checked_mul(RADIX_BUCKETS)
             .ok_or_else(|| MetalRenderError::Other("histogram count overflow".to_string()))?;
@@ -150,13 +150,17 @@ impl MetalBackend {
             encoder.set_compute_pipeline_state(&self.radix_sort_histogram_pipeline);
             encoder.set_buffer(0, Some(keys_in), 0);
             encoder.set_buffer(1, Some(&self.radix_histograms), 0);
-            encoder.set_buffer(2, Some(&self.total_overlaps_buffer), 0);
+            encoder.set_bytes(
+                2,
+                mem::size_of::<u32>() as u64,
+                &num_elements as *const _ as *const c_void,
+            );
             encoder.set_bytes(
                 3,
                 mem::size_of::<u32>() as u64,
                 &bit_offset as *const _ as *const c_void,
             );
-            dispatch_1d(encoder, dispatch_overlaps, THREADS_PER_GROUP_1D);
+            dispatch_1d(encoder, num_elements, THREADS_PER_GROUP_1D);
             encoder.end_encoding();
 
             self.encode_prefix_scan_in_place(
@@ -173,13 +177,17 @@ impl MetalBackend {
             encoder.set_buffer(2, Some(keys_out), 0);
             encoder.set_buffer(3, Some(values_out), 0);
             encoder.set_buffer(4, Some(&self.radix_histograms), 0);
-            encoder.set_buffer(5, Some(&self.total_overlaps_buffer), 0);
+            encoder.set_bytes(
+                5,
+                mem::size_of::<u32>() as u64,
+                &num_elements as *const _ as *const c_void,
+            );
             encoder.set_bytes(
                 6,
                 mem::size_of::<u32>() as u64,
                 &bit_offset as *const _ as *const c_void,
             );
-            dispatch_1d(encoder, dispatch_overlaps, THREADS_PER_GROUP_1D);
+            dispatch_1d(encoder, num_elements, THREADS_PER_GROUP_1D);
             encoder.end_encoding();
 
             *keys_in_a = !*keys_in_a;

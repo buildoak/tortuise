@@ -51,6 +51,7 @@ impl MetalBackend {
                 return Err("Tile count exceeds 10-bit tile_id encoding (max 1023 tiles)".into());
             }
             let num_tiles = usize::try_from(num_tiles_u64)?;
+            let previous_num_tiles = self.last_num_tiles;
 
             self.last_tile_count_x = tile_count_x;
             self.last_tile_count_y = tile_count_y;
@@ -74,52 +75,56 @@ impl MetalBackend {
             }
             self.ensure_tile_capacity(num_tiles)?;
 
-            let mut attempt = 0u32;
-            loop {
-                let estimated_overlaps = if self.previous_total_overlaps > 0 {
-                    (self.previous_total_overlaps as usize)
-                        .saturating_mul(2)
-                        .max(splat_count.saturating_mul(4))
+            let estimated_overlaps = if self.previous_total_overlaps > 0 {
+                let previous_overlaps = self.previous_total_overlaps as usize;
+                let scene_floor_factor = if splat_count < 1024 { 16 } else { 1 };
+                let tile_scaled_previous = if previous_num_tiles > 0 {
+                    previous_overlaps
+                        .saturating_mul(num_tiles)
+                        .div_ceil(previous_num_tiles)
                 } else {
-                    splat_count.saturating_mul(8)
-                }
-                .max(1);
+                    previous_overlaps
+                };
+                tile_scaled_previous
+                    .saturating_mul(5)
+                    .div_ceil(4)
+                    .max(splat_count.saturating_mul(scene_floor_factor))
+            } else {
+                let cold_start_factor = if splat_count < 1024 { 16 } else { 8 };
+                splat_count.saturating_mul(cold_start_factor)
+            }
+            .max(1);
 
-                self.ensure_sort_capacity_with_headroom(estimated_overlaps, 2, 1)?;
-                let result = run_single_render_attempt(
-                    self,
-                    camera,
-                    screen_width,
-                    screen_height,
-                    splat_count,
-                )?;
+            self.ensure_sort_capacity_with_headroom(estimated_overlaps, 2, 1)?;
+            let attempt_sort_count = estimated_overlaps.min(self.sort_capacity).max(1);
+            let result = run_single_render_attempt(
+                self,
+                camera,
+                screen_width,
+                screen_height,
+                splat_count,
+                attempt_sort_count,
+            )?;
 
-                self.previous_total_overlaps = result.total_overlaps;
-                self.last_actual_total_overlaps = result.total_overlaps;
-                self.last_valid_count = result.valid_count;
-                self.last_retry_count = attempt;
-                self.last_overflow_flag = result.overflow_flag;
-                self.last_tile_density = result.tile_density;
-                if result.overflow_flag == 0 {
-                    self.maybe_shrink_sort_capacity(result.total_overlaps as usize)?;
-                    self.last_sort_capacity_after = self.sort_capacity;
-                    break;
-                }
-
-                if attempt >= 1 {
-                    let growth_target = (result.total_overlaps as usize).saturating_mul(2).max(1);
-                    self.ensure_sort_capacity(growth_target)?;
-                    self.last_retry_count = attempt + 1;
-                    self.last_sort_capacity_after = self.sort_capacity;
-                    return Err(MetalRenderError::OverflowDeferred {
-                        requested_capacity: growth_target,
-                        overlaps: result.total_overlaps,
-                    });
-                }
-
-                let retry_target = (result.total_overlaps as usize).saturating_mul(2).max(1);
-                self.ensure_sort_capacity(retry_target)?;
-                attempt += 1;
+            self.previous_total_overlaps = result.total_overlaps;
+            self.last_actual_total_overlaps = result.total_overlaps;
+            self.last_valid_count = result.valid_count;
+            self.last_retry_count = 0;
+            self.last_overflow_flag = result.overflow_flag;
+            self.last_tile_density = result.tile_density;
+            if result.overflow_flag == 0 {
+                self.maybe_shrink_sort_capacity(result.total_overlaps as usize)?;
+                self.last_sort_capacity_after = self.sort_capacity;
+            } else {
+                let growth_target = (result.total_overlaps as usize)
+                    .max(attempt_sort_count.saturating_mul(2))
+                    .max(1);
+                self.ensure_sort_capacity(growth_target)?;
+                self.last_sort_capacity_after = self.sort_capacity;
+                return Err(MetalRenderError::OverflowDeferred {
+                    requested_capacity: growth_target,
+                    overlaps: result.total_overlaps,
+                });
             }
 
             self.last_render_width = screen_width;

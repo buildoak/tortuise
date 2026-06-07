@@ -37,6 +37,313 @@ pub(super) fn run_single_render_attempt(
     screen_width: usize,
     screen_height: usize,
     splat_count: usize,
+    attempt_sort_count: usize,
+) -> Result<RenderAttemptResult, MetalRenderError> {
+    let local_tile_sort_requested = metal_local_tile_sort_enabled();
+    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
+    if local_tile_sort_requested && !fast_unsorted_enabled {
+        run_single_render_attempt_two_stage(
+            backend,
+            camera,
+            screen_width,
+            screen_height,
+            splat_count,
+        )
+    } else {
+        run_single_render_attempt_fused(
+            backend,
+            camera,
+            screen_width,
+            screen_height,
+            splat_count,
+            attempt_sort_count,
+        )
+    }
+}
+
+fn run_single_render_attempt_fused(
+    backend: &mut MetalBackend,
+    camera: &Camera,
+    screen_width: usize,
+    screen_height: usize,
+    splat_count: usize,
+    attempt_sort_count: usize,
+) -> Result<RenderAttemptResult, MetalRenderError> {
+    let stage_timing_enabled = metal_stage_timing_enabled();
+    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
+    let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
+    let screen_width_u32 = u32::try_from(screen_width)?;
+    let screen_height_u32 = u32::try_from(screen_height)?;
+    let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
+    let tile_count_y = div_ceil_u32(screen_height_u32, TILE_SIZE).max(1);
+    let num_tiles_u64 = u64::from(tile_count_x) * u64::from(tile_count_y);
+    let num_tiles = usize::try_from(num_tiles_u64)?;
+
+    let attempt_sort_count_u32 = u32::try_from(attempt_sort_count)?;
+    backend.ensure_block_sums_capacity_for_count(num_tiles as u32)?;
+
+    let (fx, fy) = camera.focal_lengths(screen_width, screen_height);
+    let gpu_camera = GpuCameraData {
+        pos_x: camera.position.x,
+        pos_y: camera.position.y,
+        pos_z: camera.position.z,
+        right_x: camera.right.x,
+        right_y: camera.right.y,
+        right_z: camera.right.z,
+        up_x: camera.up.x,
+        up_y: camera.up.y,
+        up_z: camera.up.z,
+        forward_x: camera.forward.x,
+        forward_y: camera.forward.y,
+        forward_z: camera.forward.z,
+        fx,
+        fy,
+        half_w: screen_width as f32 * 0.5,
+        half_h: screen_height as f32 * 0.5,
+        near_plane: camera.near,
+        far_plane: camera.far,
+    };
+
+    let tile_config = TileConfig {
+        tile_count_x,
+        tile_count_y,
+        screen_width: screen_width_u32,
+        screen_height: screen_height_u32,
+    };
+
+    write_shared_struct(&backend.camera_buffer, &gpu_camera);
+    write_shared_struct(&backend.tile_config_buffer, &tile_config);
+
+    let tile_bytes = super::buffers::bytes_for_u32_elems(num_tiles)? as u64;
+    let tile_offsets_bytes = super::buffers::bytes_for_u32_elems(num_tiles + 1)? as u64;
+    let sort_key_bytes = super::buffers::bytes_for_u64_elems(attempt_sort_count)? as u64;
+    let sort_value_bytes = super::buffers::bytes_for_u32_elems(attempt_sort_count)? as u64;
+    let splat_count_u32 = u32::try_from(splat_count)?;
+    let framebuffer_pixels = screen_width
+        .checked_mul(screen_height)
+        .ok_or_else(|| MetalRenderError::Other("framebuffer pixel count overflow".to_string()))?;
+    let framebuffer_clear_bytes = framebuffer_pixels
+        .checked_mul(mem::size_of::<u32>())
+        .ok_or_else(|| MetalRenderError::Other("framebuffer clear size overflow".to_string()))?
+        as u64;
+
+    let mut sort_num_blocks = 0u32;
+    let mut histogram_count = 0u32;
+    if !fast_unsorted_enabled {
+        sort_num_blocks = div_ceil_u32(attempt_sort_count_u32, THREADS_PER_GROUP_1D).max(1);
+        histogram_count = sort_num_blocks
+            .checked_mul(RADIX_BUCKETS)
+            .ok_or_else(|| MetalRenderError::Other("histogram count overflow".to_string()))?;
+        backend.ensure_histogram_capacity(histogram_count as usize)?;
+        backend.ensure_block_sums_capacity_for_count(histogram_count)?;
+    }
+
+    let should_read_tile_ranges = stage_timing_enabled || backend.probe_stage_telemetry_enabled;
+    let encode_started = stage_timing_enabled.then(Instant::now);
+    let command_buffer = backend.command_queue.new_command_buffer();
+
+    let blit = command_buffer.new_blit_command_encoder();
+    blit.fill_buffer(
+        &backend.framebuffer,
+        NSRange::new(0, framebuffer_clear_bytes),
+        0,
+    );
+    blit.fill_buffer(&backend.tile_counts, NSRange::new(0, tile_bytes), 0);
+    blit.fill_buffer(
+        &backend.valid_count_buffer,
+        NSRange::new(0, mem::size_of::<u32>() as u64),
+        0,
+    );
+    blit.fill_buffer(
+        &backend.total_overlaps_buffer,
+        NSRange::new(0, mem::size_of::<u32>() as u64),
+        0,
+    );
+    blit.fill_buffer(
+        &backend.overflow_flag_buffer,
+        NSRange::new(0, mem::size_of::<u32>() as u64),
+        0,
+    );
+    blit.fill_buffer(&backend.tile_counters, NSRange::new(0, tile_bytes), 0);
+    // Fused global radix sorts the whole attempt span, so unused slots must sort after real keys.
+    blit.fill_buffer(&backend.sort_keys_a, NSRange::new(0, sort_key_bytes), 0xFF);
+    blit.fill_buffer(&backend.sort_values_a, NSRange::new(0, sort_value_bytes), 0);
+    blit.end_encoding();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.project_splats_pipeline);
+    encoder.set_buffer(0, Some(&backend.splat_buffer), 0);
+    encoder.set_buffer(1, Some(&backend.projected_buffer), 0);
+    encoder.set_buffer(2, Some(&backend.valid_count_buffer), 0);
+    encoder.set_buffer(3, Some(&backend.camera_buffer), 0);
+    encoder.set_bytes(
+        4,
+        mem::size_of::<u32>() as u64,
+        &splat_count_u32 as *const _ as *const c_void,
+    );
+    encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
+    set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
+    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.end_encoding();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.count_tile_overlaps_pipeline);
+    encoder.set_buffer(0, Some(&backend.projected_buffer), 0);
+    encoder.set_buffer(1, Some(&backend.tile_counts), 0);
+    encoder.set_buffer(2, Some(&backend.total_overlaps_buffer), 0);
+    encoder.set_buffer(3, Some(&backend.valid_count_buffer), 0);
+    encoder.set_buffer(4, Some(&backend.tile_config_buffer), 0);
+    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.end_encoding();
+
+    let blit = command_buffer.new_blit_command_encoder();
+    blit.copy_from_buffer(
+        &backend.tile_counts,
+        0,
+        &backend.tile_offsets,
+        0,
+        tile_bytes,
+    );
+    blit.copy_from_buffer(
+        &backend.total_overlaps_buffer,
+        0,
+        &backend.tile_offsets,
+        tile_bytes,
+        mem::size_of::<u32>() as u64,
+    );
+    blit.end_encoding();
+
+    backend.encode_prefix_scan_in_place(
+        command_buffer,
+        &backend.tile_offsets,
+        0,
+        num_tiles as u32,
+    )?;
+
+    if should_read_tile_ranges {
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_buffer(
+            &backend.tile_offsets,
+            0,
+            &backend.tile_offsets_readback,
+            0,
+            tile_offsets_bytes,
+        );
+        blit.end_encoding();
+    }
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.emit_tile_keys_pipeline);
+    encoder.set_buffer(0, Some(&backend.projected_buffer), 0);
+    encoder.set_buffer(1, Some(&backend.tile_offsets), 0);
+    encoder.set_buffer(2, Some(&backend.tile_counters), 0);
+    encoder.set_buffer(3, Some(&backend.sort_keys_a), 0);
+    encoder.set_buffer(4, Some(&backend.sort_values_a), 0);
+    encoder.set_buffer(5, Some(&backend.valid_count_buffer), 0);
+    encoder.set_buffer(6, Some(&backend.tile_config_buffer), 0);
+    encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
+    set_bytes_u32(encoder, 8, attempt_sort_count_u32);
+    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.end_encoding();
+
+    let mut keys_in_a = true;
+    let mut radix_passes = 0usize;
+    let (sorted_keys, sorted_values) = if fast_unsorted_enabled {
+        (&backend.sort_keys_a, &backend.sort_values_a)
+    } else {
+        backend.run_radix_sort_passes(command_buffer, attempt_sort_count_u32, &mut keys_in_a)?;
+        radix_passes = RADIX_SORT_BIT_OFFSETS.len();
+        if keys_in_a {
+            (&backend.sort_keys_a, &backend.sort_values_a)
+        } else {
+            (&backend.sort_keys_b, &backend.sort_values_b)
+        }
+    };
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.rasterize_tiles_pipeline);
+    encoder.set_buffer(0, Some(&backend.projected_buffer), 0);
+    encoder.set_buffer(1, Some(sorted_keys), 0);
+    encoder.set_buffer(2, Some(sorted_values), 0);
+    encoder.set_buffer(3, Some(&backend.tile_offsets), 0);
+    encoder.set_buffer(4, Some(&backend.framebuffer), 0);
+    encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
+    set_bytes_u32(encoder, 6, attempt_sort_count_u32);
+    encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
+    debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
+    encoder.dispatch_thread_groups(
+        MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),
+        MTLSize::new(u64::from(TILE_SIZE), u64::from(TILE_SIZE), 1),
+    );
+    encoder.end_encoding();
+
+    let encode_ms = encode_started.map(|started| duration_ms(started.elapsed()));
+    let wait_started = stage_timing_enabled.then(Instant::now);
+    let stage_result = commit_and_wait_or_disable_gpu(
+        command_buffer,
+        "fused_render_attempt",
+        GPU_WAIT_TIMEOUT,
+        &mut backend.gpu_disabled,
+    );
+    let wait_ms = wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+
+    if stage_timing_enabled {
+        eprintln!(
+            concat!(
+                "tortuise_metal_stage_timing ",
+                "{{",
+                "\"stage\":\"fused_render_attempt\",",
+                "\"ok\":{},",
+                "\"encode_ms\":{:.6},",
+                "\"wait_ms\":{:.6},",
+                "\"splat_count\":{},",
+                "\"attempt_sort_count\":{},",
+                "\"sort_capacity\":{},",
+                "\"sort_num_blocks\":{},",
+                "\"radix_histogram_count\":{},",
+                "\"radix_passes\":{},",
+                "\"fast_unsorted\":{},",
+                "\"snug_tile_bounds\":{}",
+                "}}"
+            ),
+            stage_result.is_ok(),
+            encode_ms.unwrap_or(0.0),
+            wait_ms,
+            splat_count,
+            attempt_sort_count_u32,
+            backend.sort_capacity,
+            sort_num_blocks,
+            histogram_count,
+            radix_passes,
+            fast_unsorted_enabled,
+            snug_tile_bounds_enabled
+        );
+    }
+    stage_result?;
+
+    let overflow_flag = read_shared_u32(&backend.overflow_flag_buffer);
+    let total_overlaps = read_shared_u32(&backend.total_overlaps_buffer);
+    let valid_count = read_shared_u32(&backend.valid_count_buffer);
+    let tile_density = if should_read_tile_ranges {
+        read_tile_density_telemetry(&backend.tile_offsets_readback, num_tiles)?
+    } else {
+        MetalTileDensityTelemetry::default()
+    };
+
+    Ok(RenderAttemptResult {
+        overflow_flag,
+        total_overlaps,
+        valid_count,
+        tile_density,
+    })
+}
+
+fn run_single_render_attempt_two_stage(
+    backend: &mut MetalBackend,
+    camera: &Camera,
+    screen_width: usize,
+    screen_height: usize,
+    splat_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
     let local_tile_sort_requested = metal_local_tile_sort_enabled();
@@ -299,6 +606,7 @@ pub(super) fn run_single_render_attempt(
         encoder.set_buffer(4, Some(&backend.framebuffer), 0);
         encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
         set_bytes_u32(encoder, 6, dispatch_overlaps);
+        encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
         debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
         encoder.dispatch_thread_groups(
             MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),

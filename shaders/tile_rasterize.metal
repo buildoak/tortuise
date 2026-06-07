@@ -32,11 +32,16 @@ kernel void rasterize_tiles(
     device uint* framebuffer [[buffer(4)]],
     constant TileConfig& tile_config [[buffer(5)]],
     constant uint& sort_capacity [[buffer(6)]],
+    device atomic_uint* overflow_flag [[buffer(7)]],
     uint2 threadgroup_pos [[threadgroup_position_in_grid]],
     uint2 local_pos [[thread_position_in_threadgroup]],
     uint linear_tid [[thread_index_in_threadgroup]])
 {
     (void)sort_keys; // Kept for parity with pipeline bindings; sort_values drives splat lookup.
+
+    if (atomic_load_explicit(overflow_flag, memory_order_relaxed) != 0u) {
+        return;
+    }
 
     const uint tile_x = threadgroup_pos.x;
     const uint tile_y = threadgroup_pos.y;
