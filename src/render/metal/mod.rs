@@ -58,6 +58,7 @@ pub struct MetalBackend {
     pub(super) prefix_scan_add_offsets_pipeline: ComputePipelineState,
     pub(super) radix_sort_histogram_pipeline: ComputePipelineState,
     pub(super) radix_sort_scatter_pipeline: ComputePipelineState,
+    pub(super) prepare_dispatch_1d_indirect_args_pipeline: ComputePipelineState,
     pub(super) count_tile_overlaps_pipeline: ComputePipelineState,
     pub(super) emit_tile_keys_pipeline: ComputePipelineState,
     pub(super) local_tile_sort_pipeline: ComputePipelineState,
@@ -70,6 +71,7 @@ pub struct MetalBackend {
     pub(super) total_overlaps_buffer: Buffer,
     pub(super) tile_config_buffer: Buffer,
     pub(super) halfblock_config_buffer: Buffer,
+    pub(super) valid_dispatch_args_buffer: Buffer,
     pub(super) framebuffer: Buffer,
     pub(super) halfblock_cells: Buffer,
 

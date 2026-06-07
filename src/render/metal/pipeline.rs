@@ -50,6 +50,11 @@ impl MetalBackend {
             create_pipeline(&device, &radix_sort_library, "radix_sort_histogram")?;
         let radix_sort_scatter_pipeline =
             create_pipeline(&device, &radix_sort_library, "radix_sort_scatter")?;
+        let prepare_dispatch_1d_indirect_args_pipeline = create_pipeline(
+            &device,
+            &tile_ops_library,
+            "prepare_dispatch_1d_indirect_args",
+        )?;
         let count_tile_overlaps_pipeline =
             create_pipeline(&device, &tile_ops_library, "count_tile_overlaps")?;
         let emit_tile_keys_pipeline =
@@ -86,6 +91,7 @@ impl MetalBackend {
         let tile_config_buffer = new_shared_buffer(&device, mem::size_of::<TileConfig>());
         let halfblock_config_buffer =
             new_shared_buffer(&device, mem::size_of::<super::types::GpuHalfblockConfig>());
+        let valid_dispatch_args_buffer = new_private_buffer(&device, mem::size_of::<u32>() * 3);
         let framebuffer = new_shared_buffer(&device, mem::size_of::<u32>());
         let halfblock_cells =
             new_shared_buffer(&device, mem::size_of::<super::types::GpuHalfblockCell>());
@@ -108,6 +114,7 @@ impl MetalBackend {
             prefix_scan_add_offsets_pipeline,
             radix_sort_histogram_pipeline,
             radix_sort_scatter_pipeline,
+            prepare_dispatch_1d_indirect_args_pipeline,
             count_tile_overlaps_pipeline,
             emit_tile_keys_pipeline,
             local_tile_sort_pipeline,
@@ -119,6 +126,7 @@ impl MetalBackend {
             total_overlaps_buffer,
             tile_config_buffer,
             halfblock_config_buffer,
+            valid_dispatch_args_buffer,
             framebuffer,
             halfblock_cells,
             projected_buffer,

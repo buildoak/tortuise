@@ -22,6 +22,22 @@ struct TileConfig {
     uint screen_height;
 };
 
+kernel void prepare_dispatch_1d_indirect_args(
+    device uint* dispatch_args [[buffer(0)]],
+    constant uint& item_count [[buffer(1)]],
+    constant uint& threads_per_group [[buffer(2)]],
+    uint index [[thread_position_in_grid]]
+) {
+    if (index != 0u) {
+        return;
+    }
+
+    const uint groups = max((item_count + threads_per_group - 1u) / threads_per_group, 1u);
+    dispatch_args[0] = groups;
+    dispatch_args[1] = 1u;
+    dispatch_args[2] = 1u;
+}
+
 inline uint2 unpack_tile(uint packed) {
     return uint2(packed & 0xFFFFu, packed >> 16);
 }

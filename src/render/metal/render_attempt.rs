@@ -214,13 +214,25 @@ fn run_single_render_attempt_fused(
     encoder.end_encoding();
 
     let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.prepare_dispatch_1d_indirect_args_pipeline);
+    encoder.set_buffer(0, Some(&backend.valid_dispatch_args_buffer), 0);
+    encoder.set_buffer(1, Some(&backend.valid_count_buffer), 0);
+    set_bytes_u32(encoder, 2, THREADS_PER_GROUP_1D);
+    dispatch_1d(encoder, 1, 1);
+    encoder.end_encoding();
+
+    let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&backend.count_tile_overlaps_pipeline);
     encoder.set_buffer(0, Some(&backend.projected_buffer), 0);
     encoder.set_buffer(1, Some(&backend.tile_counts), 0);
     encoder.set_buffer(2, Some(&backend.total_overlaps_buffer), 0);
     encoder.set_buffer(3, Some(&backend.valid_count_buffer), 0);
     encoder.set_buffer(4, Some(&backend.tile_config_buffer), 0);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.dispatch_thread_groups_indirect(
+        &backend.valid_dispatch_args_buffer,
+        0,
+        MTLSize::new(u64::from(THREADS_PER_GROUP_1D), 1, 1),
+    );
     encoder.end_encoding();
 
     let blit = command_buffer.new_blit_command_encoder();
@@ -272,7 +284,11 @@ fn run_single_render_attempt_fused(
     set_bytes_u32(encoder, 8, attempt_sort_count_u32);
     set_bytes_u32(encoder, 9, u32::from(approximate_depth_enabled));
     set_bytes_u32(encoder, 10, approximate_depth_bits);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.dispatch_thread_groups_indirect(
+        &backend.valid_dispatch_args_buffer,
+        0,
+        MTLSize::new(u64::from(THREADS_PER_GROUP_1D), 1, 1),
+    );
     encoder.end_encoding();
 
     let mut keys_in_a = true;
@@ -489,13 +505,25 @@ fn run_single_render_attempt_two_stage(
     encoder.end_encoding();
 
     let encoder = stage_a.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&backend.prepare_dispatch_1d_indirect_args_pipeline);
+    encoder.set_buffer(0, Some(&backend.valid_dispatch_args_buffer), 0);
+    encoder.set_buffer(1, Some(&backend.valid_count_buffer), 0);
+    set_bytes_u32(encoder, 2, THREADS_PER_GROUP_1D);
+    dispatch_1d(encoder, 1, 1);
+    encoder.end_encoding();
+
+    let encoder = stage_a.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&backend.count_tile_overlaps_pipeline);
     encoder.set_buffer(0, Some(&backend.projected_buffer), 0);
     encoder.set_buffer(1, Some(&backend.tile_counts), 0);
     encoder.set_buffer(2, Some(&backend.total_overlaps_buffer), 0);
     encoder.set_buffer(3, Some(&backend.valid_count_buffer), 0);
     encoder.set_buffer(4, Some(&backend.tile_config_buffer), 0);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    encoder.dispatch_thread_groups_indirect(
+        &backend.valid_dispatch_args_buffer,
+        0,
+        MTLSize::new(u64::from(THREADS_PER_GROUP_1D), 1, 1),
+    );
     encoder.end_encoding();
 
     let blit = stage_a.new_blit_command_encoder();
@@ -621,7 +649,7 @@ fn run_single_render_attempt_two_stage(
     set_bytes_u32(encoder, 8, sort_capacity_u32);
     set_bytes_u32(encoder, 9, 0);
     set_bytes_u32(encoder, 10, 32);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    dispatch_1d(encoder, valid_count, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
     if dispatch_overlaps > 0 {
