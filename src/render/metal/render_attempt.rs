@@ -710,16 +710,20 @@ fn metal_fast_unsorted_enabled() -> bool {
 }
 
 fn metal_snug_tile_bounds_enabled() -> bool {
-    env_flag_enabled(METAL_SNUG_TILE_BOUNDS_ENV)
+    env_flag_enabled_or_default(METAL_SNUG_TILE_BOUNDS_ENV, true)
 }
 
 fn env_flag_enabled(name: &str) -> bool {
+    env_flag_enabled_or_default(name, false)
+}
+
+fn env_flag_enabled_or_default(name: &str, default: bool) -> bool {
     std::env::var(name)
         .map(|value| {
             let value = value.trim();
             !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
         })
-        .unwrap_or(false)
+        .unwrap_or(default)
 }
 
 fn read_tile_density_telemetry(
