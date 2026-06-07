@@ -20,12 +20,17 @@ cargo run --features metal --release -- "$SCENE" --kitty \
   --kitty-scale-divisor 2
 ```
 
+- `--camera-pos x,y,z` and `--look-at x,y,z` set the live viewer's initial
+  camera. This matters for compact scenes such as Bee, where the default
+  `0,0,5` camera can make the first frame appear effectively black.
 - `--kitty-format rgb` sends `f=24` RGB payloads instead of `f=32` RGBA,
   cutting raw/base64 transport by 25% when terminal alpha blending is not
   needed.
 - `--kitty-scale-divisor N` renders the Kitty image at `1/N` resolution and
   asks Kitty to place it over the same terminal cell area. This is a deliberate
-  bandwidth/quality tradeoff for interactive preview.
+  bandwidth/quality tradeoff for interactive preview. For compact scenes such
+  as Bee, prefer divisor `1` or `2`; divisor `4` can make the splat effectively
+  disappear at normal terminal dimensions.
 
 The normal `M` render-mode cycle includes:
 

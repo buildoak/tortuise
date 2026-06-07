@@ -175,6 +175,19 @@ struct Cli {
     demo: bool,
     #[arg(
         long,
+        value_name = "x,y,z",
+        help = "Live viewer starting camera position"
+    )]
+    camera_pos: Option<String>,
+    #[arg(
+        long,
+        value_name = "x,y,z",
+        default_value = "0,0,0",
+        help = "Live viewer camera look-at target"
+    )]
+    look_at: String,
+    #[arg(
+        long,
         value_name = "N",
         default_value_t = 1,
         help = "Supersampling factor"
@@ -273,6 +286,17 @@ fn apply_splat_budget(splats: &mut Vec<splat::Splat>, budget: Option<usize>) -> 
     }
     *splats = selected;
     Ok(())
+}
+
+fn initial_live_camera(cli: &Cli) -> AppResult<(Camera, Vec3)> {
+    let position = match cli.camera_pos.as_deref() {
+        Some(raw) => parse_vec3(raw, "--camera-pos")?,
+        None => Vec3::new(0.0, 0.0, 5.0),
+    };
+    let target = parse_vec3(&cli.look_at, "--look-at")?;
+    let mut camera = Camera::new(position, -std::f32::consts::FRAC_PI_2, 0.0);
+    camera::look_at_target(&mut camera, target);
+    Ok((camera, target))
 }
 
 fn parse_probe_size(raw: &str) -> AppResult<(usize, usize)> {
@@ -604,8 +628,12 @@ fn main() -> AppResult<()> {
     let width = cols.max(1) as usize;
     let height = rows.max(1) as usize * 2;
 
-    let mut camera = Camera::new(Vec3::new(0.0, 0.0, 5.0), -std::f32::consts::FRAC_PI_2, 0.0);
-    camera::look_at_target(&mut camera, Vec3::ZERO);
+    let (camera, orbit_target) = initial_live_camera(&cli)?;
+    let dx = camera.position.x - orbit_target.x;
+    let dz = camera.position.z - orbit_target.z;
+    let orbit_radius = (dx * dx + dz * dz).sqrt().max(0.5);
+    let orbit_angle = dz.atan2(dx);
+    let orbit_height = camera.position.y - orbit_target.y;
 
     #[cfg(feature = "metal")]
     let mut metal_backend = if backend == Backend::Metal {
@@ -648,10 +676,10 @@ fn main() -> AppResult<()> {
         last_frame_time: Instant::now(),
         fps: 0.0,
         visible_splat_count: 0,
-        orbit_angle: 0.0,
-        orbit_radius: 5.0,
-        orbit_height: 0.0,
-        orbit_target: Vec3::ZERO,
+        orbit_angle,
+        orbit_radius,
+        orbit_height,
+        orbit_target,
         supersample_factor: cli.supersample.max(1),
         render_mode: {
             #[cfg(feature = "metal")]
@@ -752,6 +780,28 @@ mod tests {
         let err = apply_splat_budget(&mut splats, Some(0)).unwrap_err();
 
         assert!(err.to_string().contains("--splat-budget"));
+    }
+
+    #[test]
+    fn live_camera_flags_set_start_position_and_target() {
+        let cli = Cli::parse_from([
+            "tortuise",
+            "scene.ply",
+            "--camera-pos",
+            "0,0,0.5",
+            "--look-at",
+            "0,0,0",
+        ]);
+
+        let (camera, target) = initial_live_camera(&cli).unwrap();
+
+        assert!((camera.position.x - 0.0).abs() < f32::EPSILON);
+        assert!((camera.position.y - 0.0).abs() < f32::EPSILON);
+        assert!((camera.position.z - 0.5).abs() < f32::EPSILON);
+        assert!((target.x - 0.0).abs() < f32::EPSILON);
+        assert!((target.y - 0.0).abs() < f32::EPSILON);
+        assert!((target.z - 0.0).abs() < f32::EPSILON);
+        assert!(camera.forward.z < -0.99);
     }
 
     #[cfg(feature = "metal")]
