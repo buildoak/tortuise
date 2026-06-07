@@ -35,6 +35,10 @@ impl MetalBackend {
             &device,
             include_str!("../../../shaders/tile_rasterize.metal"),
         )?;
+        let halfblock_downsample_library = compile_library(
+            &device,
+            include_str!("../../../shaders/halfblock_downsample.metal"),
+        )?;
 
         let project_splats_pipeline =
             create_pipeline(&device, &projection_library, "project_splats")?;
@@ -54,6 +58,11 @@ impl MetalBackend {
             create_pipeline(&device, &tile_ops_library, "local_tile_sort")?;
         let rasterize_tiles_pipeline =
             create_pipeline(&device, &tile_rasterize_library, "rasterize_tiles")?;
+        let downsample_halfblock_pipeline = create_pipeline(
+            &device,
+            &halfblock_downsample_library,
+            "downsample_halfblock_cells",
+        )?;
 
         let splat_buffer = new_shared_buffer(
             &device,
@@ -75,7 +84,11 @@ impl MetalBackend {
         let total_overlaps_buffer = new_shared_buffer(&device, mem::size_of::<u32>());
         let overflow_flag_buffer = new_shared_buffer(&device, mem::size_of::<u32>());
         let tile_config_buffer = new_shared_buffer(&device, mem::size_of::<TileConfig>());
+        let halfblock_config_buffer =
+            new_shared_buffer(&device, mem::size_of::<super::types::GpuHalfblockConfig>());
         let framebuffer = new_shared_buffer(&device, mem::size_of::<u32>());
+        let halfblock_cells =
+            new_shared_buffer(&device, mem::size_of::<super::types::GpuHalfblockCell>());
         let tile_counts = new_private_buffer(&device, mem::size_of::<u32>());
         let tile_offsets = new_private_buffer(&device, mem::size_of::<u32>() * 2);
         let tile_offsets_readback = new_shared_buffer(&device, mem::size_of::<u32>() * 2);
@@ -99,12 +112,15 @@ impl MetalBackend {
             emit_tile_keys_pipeline,
             local_tile_sort_pipeline,
             rasterize_tiles_pipeline,
+            downsample_halfblock_pipeline,
             splat_buffer,
             camera_buffer,
             valid_count_buffer,
             total_overlaps_buffer,
             tile_config_buffer,
+            halfblock_config_buffer,
             framebuffer,
+            halfblock_cells,
             projected_buffer,
             tile_counts,
             tile_offsets,
@@ -122,6 +138,7 @@ impl MetalBackend {
             histogram_capacity: 1,
             block_sums_capacity: 1,
             framebuffer_capacity_pixels: 1,
+            halfblock_capacity_cells: 1,
             splats_uploaded: false,
             previous_total_overlaps: 0,
             overflow_flag_buffer,
@@ -139,6 +156,10 @@ impl MetalBackend {
             last_valid_count: 0,
             last_retry_count: 0,
             last_overflow_flag: 0,
+            last_tile_density: Default::default(),
+            probe_stage_telemetry_enabled: false,
+            last_halfblock_cols: 0,
+            last_halfblock_rows: 0,
         })
     }
 

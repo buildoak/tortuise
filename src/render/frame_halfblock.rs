@@ -18,6 +18,23 @@ fn rgb_from_packed_pixel(pixel: u32) -> [u8; 3] {
     ]
 }
 
+#[cfg(feature = "metal")]
+fn build_halfblock_cells_from_gpu_cells(
+    gpu_cells: &[crate::render::metal::GpuHalfblockCell],
+    term_cols: usize,
+    term_rows: usize,
+    out: &mut Vec<HalfblockCell>,
+) {
+    out.clear();
+    out.resize(term_cols * term_rows, ([0u8; 3], [0u8; 3]));
+    for (idx, cell) in gpu_cells.iter().take(out.len()).enumerate() {
+        out[idx] = (
+            rgb_from_packed_pixel(cell.top_rgb),
+            rgb_from_packed_pixel(cell.bottom_rgb),
+        );
+    }
+}
+
 fn build_halfblock_cells_rgb(
     fb: &[[u8; 3]],
     ss_width: usize,
@@ -145,20 +162,34 @@ pub fn render_halfblock_frame(
 
     #[cfg(feature = "metal")]
     if gpu_rendered {
-        let packed = app_state
+        let gpu_cells = app_state
             .metal_backend
             .as_ref()
-            .map(|mb| mb.framebuffer_slice())
+            .map(|mb| mb.halfblock_cells_slice())
             .unwrap_or(&[]);
-        build_halfblock_cells_packed(
-            packed,
-            ss_width,
-            ss_height,
-            term_cols,
-            term_rows,
-            ss,
-            &mut app_state.halfblock_cells,
-        );
+        if gpu_cells.len() == term_cols.saturating_mul(term_rows) {
+            build_halfblock_cells_from_gpu_cells(
+                gpu_cells,
+                term_cols,
+                term_rows,
+                &mut app_state.halfblock_cells,
+            );
+        } else {
+            let packed = app_state
+                .metal_backend
+                .as_ref()
+                .map(|mb| mb.framebuffer_slice())
+                .unwrap_or(&[]);
+            build_halfblock_cells_packed(
+                packed,
+                ss_width,
+                ss_height,
+                term_cols,
+                term_rows,
+                ss,
+                &mut app_state.halfblock_cells,
+            );
+        }
     } else {
         build_halfblock_cells_rgb(
             &app_state.render_state.framebuffer,
@@ -252,6 +283,30 @@ fn gpu_render_to_framebuffer(app_state: &mut AppState, width: usize, height: usi
             eprintln!("Metal disabled for remainder of session: {err}");
         }
         return false;
+    }
+
+    let downsample_result: Result<(), crate::render::metal::MetalRenderError> =
+        match app_state.metal_backend.as_mut() {
+            Some(mb) => mb.downsample_halfblock_cells(
+                width,
+                height,
+                width / app_state.supersample_factor as usize,
+                height / (2 * app_state.supersample_factor as usize),
+                app_state.supersample_factor as usize,
+            ),
+            None => return false,
+        };
+
+    if let Err(err) = downsample_result {
+        record_gpu_error(app_state, &err);
+        if err.should_disable_gpu() {
+            app_state.backend = Backend::Cpu;
+            app_state.metal_backend = None;
+            app_state.gpu_fallback_active = true;
+            eprintln!("Metal disabled for remainder of session: {err}");
+            return false;
+        }
+        eprintln!("Metal halfblock downsample failed; falling back to CPU downsample: {err}");
     }
 
     app_state.visible_splat_count = app_state.splats.len();

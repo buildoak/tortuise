@@ -172,6 +172,17 @@ float2 compute_2d_gaussian_extent(float3 cov) {
     return float2(extent, extent);
 }
 
+float2 compute_snug_tile_extent(float3 cov) {
+    // Conservative axis-aligned bbox for the q <= 16 ellipse. Rasterization
+    // later drops Gaussian contributions below 0.001, which happens before
+    // q = 16, so this still covers all pixels that can contribute.
+    const float sigma_cutoff = 4.0f;
+    return float2(
+        sigma_cutoff * sqrt(max(cov.x, 0.0f)),
+        sigma_cutoff * sqrt(max(cov.z, 0.0f))
+    );
+}
+
 kernel void project_splats(
     constant SplatData* splats [[buffer(0)]],
     device ProjectedSplat* projected_splats [[buffer(1)]],
@@ -179,6 +190,7 @@ kernel void project_splats(
     constant CameraData& camera [[buffer(3)]],
     constant uint& splat_count [[buffer(4)]],
     constant TileConfig& tile_config [[buffer(5)]],
+    constant uint& use_snug_tile_bounds [[buffer(6)]],
     uint index [[thread_position_in_grid]]
 ) {
     if (index >= splat_count) {
@@ -234,15 +246,18 @@ kernel void project_splats(
     if (extent.x < 0.3 || extent.y < 0.3) {
         return;
     }
+    const float2 tile_extent = use_snug_tile_bounds != 0u
+        ? compute_snug_tile_extent(cov_2d)
+        : extent;
 
     // Compute tile bounds from the same inclusive integer bbox used by the CPU
     // rasterizer/probe telemetry: floor(min edge), ceil(max edge), then clamp to screen.
     float max_pixel_x = float(tile_config.screen_width - 1);
     float max_pixel_y = float(tile_config.screen_height - 1);
-    float splat_min_x = min(max(floor(screen_x - extent.x), 0.0f), max_pixel_x);
-    float splat_min_y = min(max(floor(screen_y - extent.y), 0.0f), max_pixel_y);
-    float splat_max_x = min(max(ceil(screen_x + extent.x), 0.0f), max_pixel_x);
-    float splat_max_y = min(max(ceil(screen_y + extent.y), 0.0f), max_pixel_y);
+    float splat_min_x = min(max(floor(screen_x - tile_extent.x), 0.0f), max_pixel_x);
+    float splat_min_y = min(max(floor(screen_y - tile_extent.y), 0.0f), max_pixel_y);
+    float splat_max_x = min(max(ceil(screen_x + tile_extent.x), 0.0f), max_pixel_x);
+    float splat_max_y = min(max(ceil(screen_y + tile_extent.y), 0.0f), max_pixel_y);
 
     uint tile_min_x = uint(splat_min_x) / 16;  // TILE_SIZE = 16
     uint tile_min_y = uint(splat_min_y) / 16;

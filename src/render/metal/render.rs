@@ -62,6 +62,7 @@ impl MetalBackend {
             self.last_valid_count = 0;
             self.last_retry_count = 0;
             self.last_overflow_flag = 0;
+            self.last_tile_density = Default::default();
 
             self.ensure_framebuffer_capacity(screen_width, screen_height)?;
             if splat_count == 0 {
@@ -98,6 +99,7 @@ impl MetalBackend {
                 self.last_valid_count = result.valid_count;
                 self.last_retry_count = attempt;
                 self.last_overflow_flag = result.overflow_flag;
+                self.last_tile_density = result.tile_density;
                 if result.overflow_flag == 0 {
                     self.maybe_shrink_sort_capacity(result.total_overlaps as usize)?;
                     self.last_sort_capacity_after = self.sort_capacity;

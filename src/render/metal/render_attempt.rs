@@ -15,18 +15,20 @@ use super::sync::commit_and_wait_or_disable_gpu;
 use super::types::{
     GpuCameraData, TileConfig, RADIX_BUCKETS, SHADER_TILE_SIZE, THREADS_PER_GROUP_1D, TILE_SIZE,
 };
-use super::MetalBackend;
+use super::{MetalBackend, MetalTileDensityTelemetry};
 
 const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const METAL_STAGE_TIMING_ENV: &str = "TORTUISE_METAL_STAGE_TIMING";
 const METAL_LOCAL_TILE_SORT_ENV: &str = "TORTUISE_METAL_LOCAL_TILE_SORT";
 const METAL_FAST_UNSORTED_ENV: &str = "TORTUISE_METAL_FAST_UNSORTED";
+const METAL_SNUG_TILE_BOUNDS_ENV: &str = "TORTUISE_METAL_SNUG_TILE_BOUNDS";
 
 #[derive(Debug)]
 pub(super) struct RenderAttemptResult {
     pub overflow_flag: u32,
     pub total_overlaps: u32,
     pub valid_count: u32,
+    pub tile_density: MetalTileDensityTelemetry,
 }
 
 pub(super) fn run_single_render_attempt(
@@ -39,6 +41,7 @@ pub(super) fn run_single_render_attempt(
     let stage_timing_enabled = metal_stage_timing_enabled();
     let local_tile_sort_requested = metal_local_tile_sort_enabled();
     let fast_unsorted_enabled = metal_fast_unsorted_enabled();
+    let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
@@ -131,6 +134,7 @@ pub(super) fn run_single_render_attempt(
         &splat_count_u32 as *const _ as *const c_void,
     );
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
+    set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
     dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
@@ -163,7 +167,8 @@ pub(super) fn run_single_render_attempt(
     blit.end_encoding();
 
     backend.encode_prefix_scan_in_place(stage_a, &backend.tile_offsets, 0, num_tiles as u32)?;
-    let should_read_tile_ranges = stage_timing_enabled || local_tile_sort_requested;
+    let should_read_tile_ranges =
+        stage_timing_enabled || local_tile_sort_requested || backend.probe_stage_telemetry_enabled;
     if should_read_tile_ranges {
         let blit = stage_a.new_blit_command_encoder();
         blit.copy_from_buffer(
@@ -197,7 +202,8 @@ pub(super) fn run_single_render_attempt(
                 "\"splat_count\":{},",
                 "\"num_tiles\":{},",
                 "\"tile_count_x\":{},",
-                "\"tile_count_y\":{}",
+                "\"tile_count_y\":{},",
+                "\"snug_tile_bounds\":{}",
                 "}}"
             ),
             stage_a_result.is_ok(),
@@ -206,26 +212,29 @@ pub(super) fn run_single_render_attempt(
             splat_count,
             num_tiles,
             tile_count_x,
-            tile_count_y
+            tile_count_y,
+            snug_tile_bounds_enabled
         );
     }
     stage_a_result?;
 
     let total_overlaps = read_shared_u32(&backend.total_overlaps_buffer);
     let valid_count = read_shared_u32(&backend.valid_count_buffer);
+    let tile_density = if should_read_tile_ranges {
+        read_tile_density_telemetry(&backend.tile_offsets_readback, num_tiles)?
+    } else {
+        MetalTileDensityTelemetry::default()
+    };
     if total_overlaps > sort_capacity_u32 {
         return Ok(RenderAttemptResult {
             overflow_flag: 1,
             total_overlaps,
             valid_count,
+            tile_density,
         });
     }
 
-    let max_tile_range = if should_read_tile_ranges {
-        read_max_tile_range(&backend.tile_offsets_readback, num_tiles)?
-    } else {
-        0
-    };
+    let max_tile_range = tile_density.max_tile_range;
     let use_local_tile_sort = local_tile_sort_requested
         && !fast_unsorted_enabled
         && max_tile_range <= MAX_LOCAL_TILE_SORT;
@@ -326,6 +335,16 @@ pub(super) fn run_single_render_attempt(
                 "\"local_tile_sort\":{},",
                 "\"fast_unsorted\":{},",
                 "\"max_tile_range\":{},",
+                "\"total_tile_entries\":{},",
+                "\"p50_tile_range\":{},",
+                "\"p90_tile_range\":{},",
+                "\"p95_tile_range\":{},",
+                "\"p99_tile_range\":{},",
+                "\"tile_ranges_ge_512\":{},",
+                "\"tile_ranges_ge_1024\":{},",
+                "\"tile_ranges_ge_2048\":{},",
+                "\"tile_ranges_ge_4096\":{},",
+                "\"tile_ranges_ge_8192\":{},",
                 "\"max_local_tile_sort\":{}",
                 "}}"
             ),
@@ -341,6 +360,16 @@ pub(super) fn run_single_render_attempt(
             local_tile_sort_used,
             fast_unsorted_enabled,
             max_tile_range,
+            tile_density.total_tile_entries,
+            tile_density.p50_tile_range,
+            tile_density.p90_tile_range,
+            tile_density.p95_tile_range,
+            tile_density.p99_tile_range,
+            tile_density.tile_ranges_ge_512,
+            tile_density.tile_ranges_ge_1024,
+            tile_density.tile_ranges_ge_2048,
+            tile_density.tile_ranges_ge_4096,
+            tile_density.tile_ranges_ge_8192,
             MAX_LOCAL_TILE_SORT
         );
     }
@@ -352,6 +381,7 @@ pub(super) fn run_single_render_attempt(
         overflow_flag,
         total_overlaps,
         valid_count,
+        tile_density,
     })
 }
 
@@ -371,6 +401,10 @@ fn metal_fast_unsorted_enabled() -> bool {
     env_flag_enabled(METAL_FAST_UNSORTED_ENV)
 }
 
+fn metal_snug_tile_bounds_enabled() -> bool {
+    env_flag_enabled(METAL_SNUG_TILE_BOUNDS_ENV)
+}
+
 fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| {
@@ -380,12 +414,12 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn read_max_tile_range(
+fn read_tile_density_telemetry(
     tile_offsets_readback: &metal::Buffer,
     num_tiles: usize,
-) -> Result<u32, MetalRenderError> {
+) -> Result<MetalTileDensityTelemetry, MetalRenderError> {
     if num_tiles == 0 {
-        return Ok(0);
+        return Ok(MetalTileDensityTelemetry::default());
     }
 
     let offsets = unsafe {
@@ -394,14 +428,64 @@ fn read_max_tile_range(
             num_tiles + 1,
         )
     };
-    let mut max_range = 0u32;
+    let mut ranges = Vec::with_capacity(num_tiles);
+    let mut total_tile_entries = 0u32;
+    let mut tile_ranges_ge_512 = 0u32;
+    let mut tile_ranges_ge_1024 = 0u32;
+    let mut tile_ranges_ge_2048 = 0u32;
+    let mut tile_ranges_ge_4096 = 0u32;
+    let mut tile_ranges_ge_8192 = 0u32;
     for window in offsets.windows(2) {
         let start = window[0];
         let end = window[1];
         let count = end.checked_sub(start).ok_or_else(|| {
             MetalRenderError::Other("Metal tile offsets were not monotonic after scan".to_string())
         })?;
-        max_range = max_range.max(count);
+        total_tile_entries = total_tile_entries.checked_add(count).ok_or_else(|| {
+            MetalRenderError::Other("Metal tile range total overflowed u32".to_string())
+        })?;
+        if count >= 512 {
+            tile_ranges_ge_512 += 1;
+        }
+        if count >= 1024 {
+            tile_ranges_ge_1024 += 1;
+        }
+        if count >= 2048 {
+            tile_ranges_ge_2048 += 1;
+        }
+        if count >= 4096 {
+            tile_ranges_ge_4096 += 1;
+        }
+        if count >= 8192 {
+            tile_ranges_ge_8192 += 1;
+        }
+        ranges.push(count);
     }
-    Ok(max_range)
+    ranges.sort_unstable();
+    let max_tile_range = ranges.last().copied().unwrap_or(0);
+    Ok(MetalTileDensityTelemetry {
+        total_tile_entries,
+        max_tile_range,
+        p50_tile_range: percentile_nearest_rank(&ranges, 50),
+        p90_tile_range: percentile_nearest_rank(&ranges, 90),
+        p95_tile_range: percentile_nearest_rank(&ranges, 95),
+        p99_tile_range: percentile_nearest_rank(&ranges, 99),
+        tile_ranges_ge_512,
+        tile_ranges_ge_1024,
+        tile_ranges_ge_2048,
+        tile_ranges_ge_4096,
+        tile_ranges_ge_8192,
+    })
+}
+
+fn percentile_nearest_rank(sorted_values: &[u32], percentile: usize) -> u32 {
+    if sorted_values.is_empty() {
+        return 0;
+    }
+    let rank = sorted_values
+        .len()
+        .saturating_mul(percentile.max(1))
+        .div_ceil(100);
+    let index = rank.saturating_sub(1).min(sorted_values.len() - 1);
+    sorted_values[index]
 }

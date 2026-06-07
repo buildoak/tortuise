@@ -11,7 +11,10 @@ use crate::{
     camera::{look_at_origin, Camera},
     demo::generate_demo_splats,
     math::Vec3,
-    render::{pipeline, rasterizer, RenderState},
+    render::{
+        modes::halfblock::downsample_packed_to_terminal_into, pipeline, rasterizer, HalfblockCell,
+        RenderState,
+    },
     sort::sort_by_depth,
     splat::Splat,
 };
@@ -76,6 +79,28 @@ fn unpack_rgb(framebuffer: &[u32]) -> Vec<[u8; 3]> {
         .collect()
 }
 
+fn unpack_halfblock_cells(cells: &[types::GpuHalfblockCell]) -> Vec<HalfblockCell> {
+    cells
+        .iter()
+        .map(|cell| {
+            let top = cell.top_rgb;
+            let bottom = cell.bottom_rgb;
+            (
+                [
+                    (top & 0xFF) as u8,
+                    ((top >> 8) & 0xFF) as u8,
+                    ((top >> 16) & 0xFF) as u8,
+                ],
+                [
+                    (bottom & 0xFF) as u8,
+                    ((bottom >> 8) & 0xFF) as u8,
+                    ((bottom >> 16) & 0xFF) as u8,
+                ],
+            )
+        })
+        .collect()
+}
+
 fn cpu_reference_framebuffer(splats: &[Splat], width: usize, height: usize) -> Vec<[u8; 3]> {
     let camera = make_test_camera();
     let mut projected = Vec::with_capacity(splats.len());
@@ -94,6 +119,91 @@ fn cpu_reference_framebuffer(splats: &[Splat], width: usize, height: usize) -> V
     let mut render_state = make_render_state(width, height);
     rasterizer::rasterize_splats(&projected, &mut render_state, width, height);
     render_state.framebuffer
+}
+
+#[test]
+fn test_halfblock_downsample_matches_cpu_oracle_for_synthetic_framebuffer() {
+    let _guard = match setup_metal_test() {
+        Some(g) => g,
+        None => return,
+    };
+
+    let width = 4usize;
+    let height = 4usize;
+    let term_cols = 2usize;
+    let term_rows = 1usize;
+    let ss = 2usize;
+    let framebuffer = vec![
+        0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000, 0x000000ff, 0x0000ff00, 0x00ff0000,
+        0x00000000, 0x00000000, 0x00ff0000, 0x0000ff00, 0x000000ff, 0x00000000, 0x00ff0000,
+        0x0000ff00, 0x000000ff,
+    ];
+
+    let mut backend = MetalBackend::new(0).expect("MetalBackend::new should succeed");
+    backend
+        .ensure_framebuffer_capacity(width, height)
+        .expect("framebuffer capacity should grow");
+    unsafe {
+        let dst = backend.framebuffer.contents() as *mut u32;
+        std::ptr::copy_nonoverlapping(framebuffer.as_ptr(), dst, framebuffer.len());
+    }
+
+    backend
+        .downsample_halfblock_cells(width, height, term_cols, term_rows, ss)
+        .expect("GPU halfblock downsample should succeed");
+
+    let gpu_cells = unpack_halfblock_cells(backend.halfblock_cells_slice());
+    let mut expected = Vec::new();
+    downsample_packed_to_terminal_into(
+        &framebuffer,
+        width,
+        height,
+        term_cols,
+        term_rows,
+        ss,
+        &mut expected,
+    );
+    assert_eq!(gpu_cells, expected);
+}
+
+#[test]
+fn test_halfblock_downsample_matches_cpu_oracle_after_render() {
+    let _guard = match setup_metal_test() {
+        Some(g) => g,
+        None => return,
+    };
+
+    let width = 32usize;
+    let height = 32usize;
+    let term_cols = 16usize;
+    let term_rows = 8usize;
+    let ss = 2usize;
+    let camera = make_test_camera();
+    let splats = generate_seeded_splats(20, 0xABCDEF_u64);
+
+    let mut backend = MetalBackend::new(splats.len()).expect("MetalBackend::new should succeed");
+    backend
+        .upload_splats(&splats)
+        .expect("upload_splats should succeed");
+    backend
+        .render(&camera, width, height, splats.len())
+        .expect("render should succeed");
+    backend
+        .downsample_halfblock_cells(width, height, term_cols, term_rows, ss)
+        .expect("GPU halfblock downsample should succeed");
+
+    let gpu_cells = unpack_halfblock_cells(backend.halfblock_cells_slice());
+    let mut expected = Vec::new();
+    downsample_packed_to_terminal_into(
+        backend.framebuffer_slice(),
+        width,
+        height,
+        term_cols,
+        term_rows,
+        ss,
+        &mut expected,
+    );
+    assert_eq!(gpu_cells, expected);
 }
 
 fn make_center_red_splat() -> Splat {

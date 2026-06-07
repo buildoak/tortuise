@@ -1,5 +1,6 @@
 mod buffers;
 mod error;
+mod halfblock;
 mod pipeline;
 mod render;
 mod render_attempt;
@@ -12,6 +13,22 @@ mod types;
 use metal::{Buffer, CommandQueue, ComputePipelineState, Device};
 
 pub use error::MetalRenderError;
+pub use types::GpuHalfblockCell;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetalTileDensityTelemetry {
+    pub total_tile_entries: u32,
+    pub max_tile_range: u32,
+    pub p50_tile_range: u32,
+    pub p90_tile_range: u32,
+    pub p95_tile_range: u32,
+    pub p99_tile_range: u32,
+    pub tile_ranges_ge_512: u32,
+    pub tile_ranges_ge_1024: u32,
+    pub tile_ranges_ge_2048: u32,
+    pub tile_ranges_ge_4096: u32,
+    pub tile_ranges_ge_8192: u32,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetalProbeTelemetry {
@@ -26,6 +43,7 @@ pub struct MetalProbeTelemetry {
     pub valid_count: u32,
     pub retry_count: u32,
     pub overflow_flag: u32,
+    pub tile_density: MetalTileDensityTelemetry,
 }
 
 pub struct MetalBackend {
@@ -41,13 +59,16 @@ pub struct MetalBackend {
     pub(super) emit_tile_keys_pipeline: ComputePipelineState,
     pub(super) local_tile_sort_pipeline: ComputePipelineState,
     pub(super) rasterize_tiles_pipeline: ComputePipelineState,
+    pub(super) downsample_halfblock_pipeline: ComputePipelineState,
 
     pub(super) splat_buffer: Buffer,
     pub(super) camera_buffer: Buffer,
     pub(super) valid_count_buffer: Buffer,
     pub(super) total_overlaps_buffer: Buffer,
     pub(super) tile_config_buffer: Buffer,
+    pub(super) halfblock_config_buffer: Buffer,
     pub(super) framebuffer: Buffer,
+    pub(super) halfblock_cells: Buffer,
 
     pub(super) projected_buffer: Buffer,
     pub(super) tile_counts: Buffer,
@@ -67,6 +88,7 @@ pub struct MetalBackend {
     pub(super) histogram_capacity: usize,
     pub(super) block_sums_capacity: usize,
     pub(super) framebuffer_capacity_pixels: usize,
+    pub(super) halfblock_capacity_cells: usize,
 
     pub(super) splats_uploaded: bool,
     pub(super) previous_total_overlaps: u32,
@@ -85,6 +107,10 @@ pub struct MetalBackend {
     pub(super) last_valid_count: u32,
     pub(super) last_retry_count: u32,
     pub(super) last_overflow_flag: u32,
+    pub(super) last_tile_density: MetalTileDensityTelemetry,
+    pub(super) probe_stage_telemetry_enabled: bool,
+    pub(super) last_halfblock_cols: usize,
+    pub(super) last_halfblock_rows: usize,
 }
 
 impl std::fmt::Debug for MetalBackend {
@@ -117,6 +143,11 @@ impl MetalBackend {
             valid_count: self.last_valid_count,
             retry_count: self.last_retry_count,
             overflow_flag: self.last_overflow_flag,
+            tile_density: self.last_tile_density,
         }
+    }
+
+    pub fn set_probe_stage_telemetry_enabled(&mut self, enabled: bool) {
+        self.probe_stage_telemetry_enabled = enabled;
     }
 }

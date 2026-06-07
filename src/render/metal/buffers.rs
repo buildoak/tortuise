@@ -2,7 +2,7 @@ use std::{mem, ptr};
 
 use super::error::MetalRenderError;
 use super::pipeline::{new_private_buffer, new_shared_buffer};
-use super::types::THREADS_PER_GROUP_1D;
+use super::types::{GpuHalfblockCell, THREADS_PER_GROUP_1D};
 use super::MetalBackend;
 
 impl MetalBackend {
@@ -42,6 +42,30 @@ impl MetalBackend {
             new_shared_buffer(&self.device, bytes_for_u32_elems(num_tiles + 1)?);
         self.tile_counters = new_private_buffer(&self.device, bytes_for_u32_elems(num_tiles)?);
         self.tile_capacity = num_tiles;
+        Ok(())
+    }
+
+    pub(super) fn ensure_halfblock_capacity(
+        &mut self,
+        term_cols: usize,
+        term_rows: usize,
+    ) -> Result<(), MetalRenderError> {
+        let cells = term_cols
+            .checked_mul(term_rows)
+            .ok_or_else(|| MetalRenderError::Other("halfblock cell count overflow".to_string()))?;
+
+        if cells > self.halfblock_capacity_cells {
+            self.halfblock_cells = new_shared_buffer(
+                &self.device,
+                cells
+                    .checked_mul(mem::size_of::<GpuHalfblockCell>())
+                    .ok_or_else(|| {
+                        MetalRenderError::Other("halfblock cell buffer size overflow".to_string())
+                    })?,
+            );
+            self.halfblock_capacity_cells = cells;
+        }
+
         Ok(())
     }
 
@@ -157,6 +181,18 @@ impl MetalBackend {
 
         let src = self.framebuffer.contents() as *const u32;
         unsafe { std::slice::from_raw_parts(src, pixel_count) }
+    }
+
+    pub fn halfblock_cells_slice(&self) -> &[GpuHalfblockCell] {
+        let cell_count = self
+            .last_halfblock_cols
+            .saturating_mul(self.last_halfblock_rows);
+        if cell_count == 0 {
+            return &[];
+        }
+
+        let src = self.halfblock_cells.contents() as *const GpuHalfblockCell;
+        unsafe { std::slice::from_raw_parts(src, cell_count) }
     }
 }
 

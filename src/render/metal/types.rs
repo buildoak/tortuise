@@ -70,7 +70,29 @@ pub struct TileConfig {
     pub screen_height: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuHalfblockConfig {
+    pub framebuffer_width: u32,
+    pub framebuffer_height: u32,
+    pub term_cols: u32,
+    pub term_rows: u32,
+    pub supersample: u32,
+    pub _reserved0: u32,
+    pub _reserved1: u32,
+    pub _reserved2: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GpuHalfblockCell {
+    pub top_rgb: u32,
+    pub bottom_rgb: u32,
+}
+
 const _: [(); 48] = [(); std::mem::size_of::<GpuSplatData>()];
 const _: [(); 72] = [(); std::mem::size_of::<GpuCameraData>()];
 const _: [(); 52] = [(); std::mem::size_of::<GpuProjectedSplat>()];
 const _: [(); 16] = [(); std::mem::size_of::<TileConfig>()];
+const _: [(); 32] = [(); std::mem::size_of::<GpuHalfblockConfig>()];
+const _: [(); 8] = [(); std::mem::size_of::<GpuHalfblockCell>()];

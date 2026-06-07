@@ -419,6 +419,22 @@ pub struct ProbeMetalStageTelemetry {
     pub valid_count: u32,
     pub retry_count: u32,
     pub overflow_flag: u32,
+    pub tile_density: ProbeMetalTileDensityTelemetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProbeMetalTileDensityTelemetry {
+    pub total_tile_entries: u32,
+    pub max_tile_range: u32,
+    pub p50_tile_range: u32,
+    pub p90_tile_range: u32,
+    pub p95_tile_range: u32,
+    pub p99_tile_range: u32,
+    pub tile_ranges_ge_512: u32,
+    pub tile_ranges_ge_1024: u32,
+    pub tile_ranges_ge_2048: u32,
+    pub tile_ranges_ge_4096: u32,
+    pub tile_ranges_ge_8192: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -753,6 +769,7 @@ fn render_metal_probe_frames(
     }
 
     let mut backend = super::metal::MetalBackend::new(splats.len())?;
+    backend.set_probe_stage_telemetry_enabled(config.stage_telemetry);
     backend.upload_splats(splats)?;
     let mut timing = ProbeBackendTiming {
         frames: config.frames,
@@ -897,6 +914,26 @@ impl From<super::metal::MetalProbeTelemetry> for ProbeMetalStageTelemetry {
             valid_count: value.valid_count,
             retry_count: value.retry_count,
             overflow_flag: value.overflow_flag,
+            tile_density: ProbeMetalTileDensityTelemetry::from(value.tile_density),
+        }
+    }
+}
+
+#[cfg(feature = "metal")]
+impl From<super::metal::MetalTileDensityTelemetry> for ProbeMetalTileDensityTelemetry {
+    fn from(value: super::metal::MetalTileDensityTelemetry) -> Self {
+        Self {
+            total_tile_entries: value.total_tile_entries,
+            max_tile_range: value.max_tile_range,
+            p50_tile_range: value.p50_tile_range,
+            p90_tile_range: value.p90_tile_range,
+            p95_tile_range: value.p95_tile_range,
+            p99_tile_range: value.p99_tile_range,
+            tile_ranges_ge_512: value.tile_ranges_ge_512,
+            tile_ranges_ge_1024: value.tile_ranges_ge_1024,
+            tile_ranges_ge_2048: value.tile_ranges_ge_2048,
+            tile_ranges_ge_4096: value.tile_ranges_ge_4096,
+            tile_ranges_ge_8192: value.tile_ranges_ge_8192,
         }
     }
 }
@@ -1906,7 +1943,8 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
             "\"actual_total_overlaps\":{},",
             "\"valid_count\":{},",
             "\"retry_count\":{},",
-            "\"overflow_flag\":{}",
+            "\"overflow_flag\":{},",
+            "\"tile_density\":{}",
             "}}"
         ),
         telemetry.tile_count_x,
@@ -1919,7 +1957,39 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
         telemetry.actual_total_overlaps,
         telemetry.valid_count,
         telemetry.retry_count,
-        telemetry.overflow_flag
+        telemetry.overflow_flag,
+        metal_tile_density_telemetry_json(&telemetry.tile_density)
+    )
+}
+
+fn metal_tile_density_telemetry_json(telemetry: &ProbeMetalTileDensityTelemetry) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"total_tile_entries\":{},",
+            "\"max_tile_range\":{},",
+            "\"p50_tile_range\":{},",
+            "\"p90_tile_range\":{},",
+            "\"p95_tile_range\":{},",
+            "\"p99_tile_range\":{},",
+            "\"tile_ranges_ge_512\":{},",
+            "\"tile_ranges_ge_1024\":{},",
+            "\"tile_ranges_ge_2048\":{},",
+            "\"tile_ranges_ge_4096\":{},",
+            "\"tile_ranges_ge_8192\":{}",
+            "}}"
+        ),
+        telemetry.total_tile_entries,
+        telemetry.max_tile_range,
+        telemetry.p50_tile_range,
+        telemetry.p90_tile_range,
+        telemetry.p95_tile_range,
+        telemetry.p99_tile_range,
+        telemetry.tile_ranges_ge_512,
+        telemetry.tile_ranges_ge_1024,
+        telemetry.tile_ranges_ge_2048,
+        telemetry.tile_ranges_ge_4096,
+        telemetry.tile_ranges_ge_8192
     )
 }
 
@@ -2790,6 +2860,19 @@ mod tests {
 
         assert_eq!(telemetry.valid_count, projected.len() as u32);
         assert_eq!(telemetry.actual_total_overlaps, cpu_overlaps);
+        assert_eq!(telemetry.tile_density.total_tile_entries, cpu_overlaps);
+        assert!(telemetry.tile_density.max_tile_range > 0);
+        assert!(telemetry.tile_density.p95_tile_range <= telemetry.tile_density.max_tile_range);
+
+        let stage_path = result.metal_frames[0]
+            .stage_telemetry_path
+            .as_ref()
+            .expect("Metal stage telemetry path should be captured");
+        let stage_json = fs::read_to_string(stage_path).unwrap();
+        assert!(stage_json.contains("\"tile_density\""));
+        assert!(stage_json.contains("\"total_tile_entries\""));
+        assert!(stage_json.contains("\"p99_tile_range\""));
+        assert!(stage_json.contains("\"tile_ranges_ge_512\""));
         assert_eq!(
             result.diff_frames[0].metrics.classification,
             ProbeDiffClassification::Pass
