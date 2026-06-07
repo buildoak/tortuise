@@ -95,6 +95,7 @@ fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
     rgb
 }
 
+#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn packed_framebuffer_to_rgb(packed: &[u32], out: &mut Vec<u8>) {
     out.clear();
     out.reserve(packed.len().saturating_mul(3));
