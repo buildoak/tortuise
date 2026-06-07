@@ -12,6 +12,21 @@ Run a scene in Kitty graphics protocol mode:
 cargo run --features metal --release -- "$SCENE" --kitty
 ```
 
+Transport/quality knobs:
+
+```bash
+cargo run --features metal --release -- "$SCENE" --kitty \
+  --kitty-format rgb \
+  --kitty-scale-divisor 2
+```
+
+- `--kitty-format rgb` sends `f=24` RGB payloads instead of `f=32` RGBA,
+  cutting raw/base64 transport by 25% when terminal alpha blending is not
+  needed.
+- `--kitty-scale-divisor N` renders the Kitty image at `1/N` resolution and
+  asks Kitty to place it over the same terminal cell area. This is a deliberate
+  bandwidth/quality tradeoff for interactive preview.
+
 The normal `M` render-mode cycle includes:
 
 ```text

@@ -29,14 +29,14 @@ pub enum KittyPayloadFormat {
 }
 
 impl KittyPayloadFormat {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Rgba32 => "rgba",
             Self::Rgb24 => "rgb",
         }
     }
 
-    fn kitty_format(self) -> u8 {
+    pub fn kitty_format(self) -> u8 {
         match self {
             Self::Rgba32 => 32,
             Self::Rgb24 => 24,
@@ -93,6 +93,16 @@ fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
         rgb.extend_from_slice(&pixel[..3]);
     }
     rgb
+}
+
+fn packed_framebuffer_to_rgb(packed: &[u32], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(packed.len().saturating_mul(3));
+    for pixel in packed {
+        out.push((pixel & 0xFF) as u8);
+        out.push(((pixel >> 8) & 0xFF) as u8);
+        out.push(((pixel >> 16) & 0xFF) as u8);
+    }
 }
 
 fn validate_rgba_dimensions(width: usize, height: usize, rgba: &[u8]) -> io::Result<usize> {
@@ -329,14 +339,16 @@ fn write_kitty_rgba_direct(
     height: usize,
     term_cols: usize,
     term_rows: usize,
-    rgba: &[u8],
+    format: KittyPayloadFormat,
+    payload: &[u8],
 ) -> io::Result<(usize, usize)> {
-    if rgba.is_empty() {
+    if payload.is_empty() {
         return Ok((0, 0));
     }
 
-    let encoded = BASE64_STANDARD.encode(rgba);
-    debug_assert_eq!(encoded.len(), kitty_base64_len(rgba.len()));
+    let encoded = BASE64_STANDARD.encode(payload);
+    debug_assert_eq!(encoded.len(), kitty_base64_len(payload.len()));
+    let kitty_format = format.kitty_format();
     let mut chunks = 0usize;
     let mut offset = 0usize;
     while offset < encoded.len() {
@@ -346,7 +358,7 @@ fn write_kitty_rgba_direct(
         if offset == 0 {
             write!(
                 stdout,
-                "\x1b_Ga=T,f=32,t=d,s={width},v={height},c={term_cols},r={term_rows},i={image_id},q=2,C=1,m={more};{chunk}\x1b\\"
+                "\x1b_Ga=T,f={kitty_format},t=d,s={width},v={height},c={term_cols},r={term_rows},i={image_id},q=2,C=1,m={more};{chunk}\x1b\\"
             )?;
         } else {
             write!(stdout, "\x1b_Gq=2,m={more};{chunk}\x1b\\")?;
@@ -355,6 +367,26 @@ fn write_kitty_rgba_direct(
         offset = end;
     }
     Ok((encoded.len(), chunks))
+}
+
+#[cfg_attr(not(feature = "metal"), allow(dead_code))]
+fn kitty_payload_format_from_env() -> KittyPayloadFormat {
+    std::env::var("TORTUISE_KITTY_FORMAT")
+        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "rgb" | "24" | "f24" => KittyPayloadFormat::Rgb24,
+            _ => KittyPayloadFormat::Rgba32,
+        })
+        .unwrap_or(KittyPayloadFormat::Rgba32)
+}
+
+#[cfg_attr(not(feature = "metal"), allow(dead_code))]
+fn kitty_scale_divisor_from_env() -> usize {
+    std::env::var("TORTUISE_KITTY_SCALE_DIVISOR")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
+        .min(16)
 }
 
 #[cfg(feature = "metal")]
@@ -393,8 +425,13 @@ pub fn render_kitty_frame(
     }
 
     let ss = app_state.supersample_factor as usize;
-    let width = term_cols.saturating_mul(ss).max(1);
-    let height = term_rows.saturating_mul(2).saturating_mul(ss).max(1);
+    let scale_divisor = kitty_scale_divisor_from_env();
+    let width = term_cols.saturating_mul(ss).div_ceil(scale_divisor).max(1);
+    let height = term_rows
+        .saturating_mul(2)
+        .saturating_mul(ss)
+        .div_ceil(scale_divisor)
+        .max(1);
     super::pipeline::resize_render_state(&mut app_state.render_state, width, height);
 
     if let Err(err) = render_metal_framebuffer(app_state, width, height) {
@@ -404,9 +441,21 @@ pub fn render_kitty_frame(
         );
     }
 
-    let mut rgba = Vec::with_capacity(width.saturating_mul(height).saturating_mul(4));
+    let format = kitty_payload_format_from_env();
+    let mut payload = Vec::with_capacity(
+        width
+            .saturating_mul(height)
+            .saturating_mul(format.bytes_per_pixel()),
+    );
     if let Some(mb) = app_state.metal_backend.as_ref() {
-        packed_framebuffer_to_rgba(mb.framebuffer_slice(), &mut rgba);
+        match format {
+            KittyPayloadFormat::Rgba32 => {
+                packed_framebuffer_to_rgba(mb.framebuffer_slice(), &mut payload)
+            }
+            KittyPayloadFormat::Rgb24 => {
+                packed_framebuffer_to_rgb(mb.framebuffer_slice(), &mut payload)
+            }
+        }
     }
 
     queue!(stdout, cursor::MoveTo(0, 0))?;
@@ -417,9 +466,10 @@ pub fn render_kitty_frame(
         height,
         term_cols,
         term_rows,
-        &rgba,
+        format,
+        &payload,
     )?;
-    app_state.kitty_payload_bytes = rgba.len();
+    app_state.kitty_payload_bytes = payload.len();
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
     app_state.visible_splat_count = app_state.splats.len();
@@ -442,14 +492,30 @@ mod tests {
         let rgba = vec![7u8; 4096];
         let mut out = Vec::new();
 
-        let (base64_bytes, chunks) =
-            write_kitty_rgba_direct(&mut out, 1, 32, 32, 16, 16, &rgba).unwrap();
+        let (base64_bytes, chunks) = write_kitty_rgba_direct(
+            &mut out,
+            1,
+            32,
+            32,
+            16,
+            16,
+            KittyPayloadFormat::Rgba32,
+            &rgba,
+        )
+        .unwrap();
 
         assert_eq!(base64_bytes, kitty_base64_len(rgba.len()));
         assert_eq!(chunks, 2);
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("\x1b_Ga=T,f=32,t=d,s=32,v=32,c=16,r=16,i=1,q=2,C=1,m=1;"));
         assert!(text.contains("\x1b_Gq=2,m=0;"));
+    }
+
+    #[test]
+    fn packed_framebuffer_to_rgb_drops_alpha() {
+        let mut out = Vec::new();
+        packed_framebuffer_to_rgb(&[0x44332211], &mut out);
+        assert_eq!(out, vec![0x11, 0x22, 0x33]);
     }
 
     #[test]

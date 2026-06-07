@@ -148,6 +148,21 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(
         long,
+        value_name = "rgba|rgb",
+        help = "Kitty graphics payload format; rgb cuts transport bytes by 25% when alpha is not needed"
+    )]
+    kitty_format: Option<String>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 1,
+        help = "Render Kitty graphics at 1/N resolution and scale to terminal placement"
+    )]
+    kitty_scale_divisor: usize,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
         value_name = "exact|fast-preview|turbo",
         help = "Metal quality tier; exact preserves correctness, fast-preview/turbo are approximate"
     )]
@@ -320,6 +335,8 @@ fn validate_probe_inspect_scale(scale: usize) -> AppResult<()> {
 fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     #[cfg(feature = "metal")]
     apply_metal_quality_override(cli)?;
+    #[cfg(feature = "metal")]
+    apply_kitty_transport_overrides(cli)?;
 
     let (width, height) = parse_probe_size(&cli.probe_size)?;
     validate_probe_fov_deg(cli.probe_fov_deg)?;
@@ -436,6 +453,29 @@ fn apply_metal_quality_override(cli: &Cli) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "metal")]
+fn apply_kitty_transport_overrides(cli: &Cli) -> AppResult<()> {
+    if let Some(raw) = cli.kitty_format.as_deref() {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "rgba" | "rgb" => {
+                std::env::set_var("TORTUISE_KITTY_FORMAT", normalized);
+            }
+            _ => {
+                return Err(format!("Invalid --kitty-format '{raw}'. Expected rgba or rgb").into());
+            }
+        }
+    }
+    if cli.kitty_scale_divisor == 0 {
+        return Err("--kitty-scale-divisor must be greater than 0".into());
+    }
+    std::env::set_var(
+        "TORTUISE_KITTY_SCALE_DIVISOR",
+        cli.kitty_scale_divisor.to_string(),
+    );
+    Ok(())
+}
+
 fn json_usize_field(json: &str, field: &str) -> Option<usize> {
     let key = format!("\"{field}\"");
     let start = json.find(&key)?;
@@ -523,6 +563,8 @@ fn main() -> AppResult<()> {
 
     #[cfg(feature = "metal")]
     apply_metal_quality_override(&cli)?;
+    #[cfg(feature = "metal")]
+    apply_kitty_transport_overrides(&cli)?;
 
     #[cfg(feature = "metal")]
     let mut backend = if cli.cpu {
@@ -722,6 +764,24 @@ mod tests {
         cli.metal_quality = Some("wat".to_string());
         let err = apply_metal_quality_override(&cli).unwrap_err();
         assert!(err.to_string().contains("Invalid --metal-quality"));
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn kitty_transport_validation_rejects_bad_values() {
+        let mut cli = Cli::parse_from(["tortuise", "--kitty-format", "rgb"]);
+        apply_kitty_transport_overrides(&cli).unwrap();
+        std::env::remove_var("TORTUISE_KITTY_FORMAT");
+        std::env::remove_var("TORTUISE_KITTY_SCALE_DIVISOR");
+
+        cli.kitty_format = Some("jpeg".to_string());
+        let err = apply_kitty_transport_overrides(&cli).unwrap_err();
+        assert!(err.to_string().contains("Invalid --kitty-format"));
+
+        cli.kitty_format = None;
+        cli.kitty_scale_divisor = 0;
+        let err = apply_kitty_transport_overrides(&cli).unwrap_err();
+        assert!(err.to_string().contains("--kitty-scale-divisor"));
     }
 
     #[test]
