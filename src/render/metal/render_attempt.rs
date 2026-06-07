@@ -19,9 +19,27 @@ use super::{MetalBackend, MetalTileDensityTelemetry};
 
 const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const METAL_STAGE_TIMING_ENV: &str = "TORTUISE_METAL_STAGE_TIMING";
+const METAL_SORT_PATH_ENV: &str = "TORTUISE_METAL_SORT_PATH";
 const METAL_LOCAL_TILE_SORT_ENV: &str = "TORTUISE_METAL_LOCAL_TILE_SORT";
 const METAL_FAST_UNSORTED_ENV: &str = "TORTUISE_METAL_FAST_UNSORTED";
 const METAL_SNUG_TILE_BOUNDS_ENV: &str = "TORTUISE_METAL_SNUG_TILE_BOUNDS";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetalSortPath {
+    Fused,
+    Hybrid,
+    FastUnsorted,
+}
+
+impl MetalSortPath {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Fused => "fused",
+            Self::Hybrid => "hybrid",
+            Self::FastUnsorted => "fast-unsorted",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct RenderAttemptResult {
@@ -39,9 +57,9 @@ pub(super) fn run_single_render_attempt(
     splat_count: usize,
     attempt_sort_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
-    let local_tile_sort_requested = metal_local_tile_sort_enabled();
-    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
-    if local_tile_sort_requested && !fast_unsorted_enabled {
+    let sort_path = metal_sort_path();
+    backend.last_sort_path = sort_path.label();
+    if sort_path == MetalSortPath::Hybrid {
         run_single_render_attempt_two_stage(
             backend,
             camera,
@@ -57,6 +75,7 @@ pub(super) fn run_single_render_attempt(
             screen_height,
             splat_count,
             attempt_sort_count,
+            sort_path == MetalSortPath::FastUnsorted,
         )
     }
 }
@@ -68,9 +87,9 @@ fn run_single_render_attempt_fused(
     screen_height: usize,
     splat_count: usize,
     attempt_sort_count: usize,
+    fast_unsorted_enabled: bool,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
-    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
@@ -699,6 +718,28 @@ fn duration_ms(duration: Duration) -> f64 {
 
 fn metal_stage_timing_enabled() -> bool {
     std::env::var_os(METAL_STAGE_TIMING_ENV).is_some()
+}
+
+fn metal_sort_path() -> MetalSortPath {
+    if let Ok(value) = std::env::var(METAL_SORT_PATH_ENV) {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "hybrid" | "local" | "local-tile" | "local_tile" => return MetalSortPath::Hybrid,
+            "fast-unsorted" | "fast_unsorted" | "unsorted" => {
+                return MetalSortPath::FastUnsorted;
+            }
+            "fused" | "" => return MetalSortPath::Fused,
+            _ => return MetalSortPath::Fused,
+        }
+    }
+
+    if metal_fast_unsorted_enabled() {
+        MetalSortPath::FastUnsorted
+    } else if metal_local_tile_sort_enabled() {
+        MetalSortPath::Hybrid
+    } else {
+        MetalSortPath::Fused
+    }
 }
 
 fn metal_local_tile_sort_enabled() -> bool {

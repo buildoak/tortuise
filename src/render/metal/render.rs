@@ -58,6 +58,8 @@ impl MetalBackend {
             self.last_num_tiles = num_tiles;
             self.last_sort_capacity_before = self.sort_capacity;
             self.last_sort_capacity_after = self.sort_capacity;
+            self.last_estimated_overlaps = 0;
+            self.last_attempt_sort_count = 0;
             self.last_previous_total_overlaps = self.previous_total_overlaps;
             self.last_actual_total_overlaps = 0;
             self.last_valid_count = 0;
@@ -97,6 +99,8 @@ impl MetalBackend {
 
             self.ensure_sort_capacity_with_headroom(estimated_overlaps, 2, 1)?;
             let attempt_sort_count = estimated_overlaps.min(self.sort_capacity).max(1);
+            self.last_estimated_overlaps = estimated_overlaps;
+            self.last_attempt_sort_count = attempt_sort_count;
             let result = run_single_render_attempt(
                 self,
                 camera,
