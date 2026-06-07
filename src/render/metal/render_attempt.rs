@@ -15,7 +15,7 @@ use super::sync::commit_and_wait_or_disable_gpu;
 use super::types::{
     GpuCameraData, TileConfig, RADIX_BUCKETS, SHADER_TILE_SIZE, THREADS_PER_GROUP_1D, TILE_SIZE,
 };
-use super::{MetalBackend, MetalTileDensityTelemetry};
+use super::{MetalBackend, MetalStageTimingTelemetry, MetalTileDensityTelemetry};
 
 const GPU_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 const METAL_STAGE_TIMING_ENV: &str = "TORTUISE_METAL_STAGE_TIMING";
@@ -94,6 +94,7 @@ fn run_single_render_attempt_fused(
     sort_path: MetalSortPath,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
+    let capture_stage_timing = stage_timing_enabled || backend.probe_stage_timing_enabled;
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
     let fast_unsorted_enabled = sort_path == MetalSortPath::FastUnsorted;
     let approximate_depth_enabled = sort_path == MetalSortPath::CoarseDepthApprox;
@@ -168,7 +169,7 @@ fn run_single_render_attempt_fused(
     }
 
     let should_read_tile_ranges = stage_timing_enabled || backend.probe_stage_telemetry_enabled;
-    let encode_started = stage_timing_enabled.then(Instant::now);
+    let encode_started = capture_stage_timing.then(Instant::now);
     let command_buffer = backend.command_queue.new_command_buffer();
 
     let blit = command_buffer.new_blit_command_encoder();
@@ -347,7 +348,7 @@ fn run_single_render_attempt_fused(
     encoder.end_encoding();
 
     let encode_ms = encode_started.map(|started| duration_ms(started.elapsed()));
-    let wait_started = stage_timing_enabled.then(Instant::now);
+    let wait_started = capture_stage_timing.then(Instant::now);
     let stage_result = commit_and_wait_or_disable_gpu(
         command_buffer,
         "fused_render_attempt",
@@ -355,6 +356,16 @@ fn run_single_render_attempt_fused(
         &mut backend.gpu_disabled,
     );
     let wait_ms = wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+    let encode_ms = encode_ms.unwrap_or(0.0);
+
+    if capture_stage_timing {
+        backend.record_stage_timing(MetalStageTimingTelemetry {
+            stage: "fused_render_attempt",
+            ok: stage_result.is_ok(),
+            encode_ms,
+            wait_ms,
+        });
+    }
 
     if stage_timing_enabled {
         eprintln!(
@@ -376,7 +387,7 @@ fn run_single_render_attempt_fused(
                 "}}"
             ),
             stage_result.is_ok(),
-            encode_ms.unwrap_or(0.0),
+            encode_ms,
             wait_ms,
             splat_count,
             attempt_sort_count_u32,
@@ -415,6 +426,7 @@ fn run_single_render_attempt_two_stage(
     splat_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
+    let capture_stage_timing = stage_timing_enabled || backend.probe_stage_timing_enabled;
     let local_tile_sort_requested = metal_local_tile_sort_enabled();
     let fast_unsorted_enabled = metal_fast_unsorted_enabled();
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
@@ -472,7 +484,7 @@ fn run_single_render_attempt_two_stage(
         .ok_or_else(|| MetalRenderError::Other("framebuffer clear size overflow".to_string()))?
         as u64;
 
-    let stage_a_encode_started = stage_timing_enabled.then(Instant::now);
+    let stage_a_encode_started = capture_stage_timing.then(Instant::now);
     let stage_a = backend.command_queue.new_command_buffer();
 
     let blit = stage_a.new_blit_command_encoder();
@@ -570,16 +582,25 @@ fn run_single_render_attempt_two_stage(
         blit.end_encoding();
     }
     let stage_a_encode_ms = stage_a_encode_started.map(|started| duration_ms(started.elapsed()));
-    let stage_a_wait_started = stage_timing_enabled.then(Instant::now);
+    let stage_a_wait_started = capture_stage_timing.then(Instant::now);
     let stage_a_result = commit_and_wait_or_disable_gpu(
         stage_a,
         "project_count_scan",
         GPU_WAIT_TIMEOUT,
         &mut backend.gpu_disabled,
     );
+    let stage_a_wait_ms =
+        stage_a_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+    let stage_a_encode_ms = stage_a_encode_ms.unwrap_or(0.0);
+    if capture_stage_timing {
+        backend.record_stage_timing(MetalStageTimingTelemetry {
+            stage: "project_count_scan",
+            ok: stage_a_result.is_ok(),
+            encode_ms: stage_a_encode_ms,
+            wait_ms: stage_a_wait_ms,
+        });
+    }
     if stage_timing_enabled {
-        let stage_a_wait_ms =
-            stage_a_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
         eprintln!(
             concat!(
                 "tortuise_metal_stage_timing ",
@@ -596,7 +617,7 @@ fn run_single_render_attempt_two_stage(
                 "}}"
             ),
             stage_a_result.is_ok(),
-            stage_a_encode_ms.unwrap_or(0.0),
+            stage_a_encode_ms,
             stage_a_wait_ms,
             splat_count,
             num_tiles,
@@ -641,7 +662,7 @@ fn run_single_render_attempt_two_stage(
         backend.ensure_block_sums_capacity_for_count(histogram_count)?;
     }
 
-    let stage_b_encode_started = stage_timing_enabled.then(Instant::now);
+    let stage_b_encode_started = capture_stage_timing.then(Instant::now);
     let stage_b = backend.command_queue.new_command_buffer();
     let mut keys_in_a = true;
     let mut radix_passes = 0usize;
@@ -700,16 +721,25 @@ fn run_single_render_attempt_two_stage(
     }
 
     let stage_b_encode_ms = stage_b_encode_started.map(|started| duration_ms(started.elapsed()));
-    let stage_b_wait_started = stage_timing_enabled.then(Instant::now);
+    let stage_b_wait_started = capture_stage_timing.then(Instant::now);
     let stage_b_result = commit_and_wait_or_disable_gpu(
         stage_b,
         "sort_rasterize",
         GPU_WAIT_TIMEOUT,
         &mut backend.gpu_disabled,
     );
+    let stage_b_wait_ms =
+        stage_b_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
+    let stage_b_encode_ms = stage_b_encode_ms.unwrap_or(0.0);
+    if capture_stage_timing {
+        backend.record_stage_timing(MetalStageTimingTelemetry {
+            stage: "sort_rasterize",
+            ok: stage_b_result.is_ok(),
+            encode_ms: stage_b_encode_ms,
+            wait_ms: stage_b_wait_ms,
+        });
+    }
     if stage_timing_enabled {
-        let stage_b_wait_ms =
-            stage_b_wait_started.map_or(0.0, |started| duration_ms(started.elapsed()));
         eprintln!(
             concat!(
                 "tortuise_metal_stage_timing ",
@@ -741,7 +771,7 @@ fn run_single_render_attempt_two_stage(
                 "}}"
             ),
             stage_b_result.is_ok(),
-            stage_b_encode_ms.unwrap_or(0.0),
+            stage_b_encode_ms,
             stage_b_wait_ms,
             splat_count,
             dispatch_overlaps,

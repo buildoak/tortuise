@@ -169,6 +169,9 @@ impl MetalBackend {
             last_overflow_flag: 0,
             last_tile_density: Default::default(),
             probe_stage_telemetry_enabled: false,
+            probe_stage_timing_enabled: false,
+            last_stage_timings: Default::default(),
+            last_stage_timing_count: 0,
             last_halfblock_cols: 0,
             last_halfblock_rows: 0,
         })

@@ -429,6 +429,21 @@ pub struct ProbeMetalStageTelemetry {
     pub retry_count: u32,
     pub overflow_flag: u32,
     pub tile_density: ProbeMetalTileDensityTelemetry,
+    pub stage_timings: Vec<ProbeMetalStageTiming>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeMetalStageTiming {
+    pub stage: &'static str,
+    pub ok: bool,
+    pub encode_ms: f64,
+    pub wait_ms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeMetalFrameStageTiming {
+    pub frame: usize,
+    pub stages: Vec<ProbeMetalStageTiming>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -454,6 +469,7 @@ pub struct ProbeBackendTiming {
     pub render_ms: f64,
     pub readback_normalize_ms: f64,
     pub artifact_write_ms: f64,
+    pub stage_timings: Vec<ProbeMetalFrameStageTiming>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -806,6 +822,7 @@ fn render_metal_probe_frames(
 
     let mut backend = super::metal::MetalBackend::new(splats.len())?;
     backend.set_probe_stage_telemetry_enabled(config.stage_telemetry);
+    backend.set_probe_stage_timing_enabled(config.stage_telemetry || config.timing);
     backend.upload_splats(splats)?;
     let mut timing = ProbeBackendTiming {
         frames: config.frames,
@@ -830,8 +847,17 @@ fn render_metal_probe_frames(
         let frame = normalize_metal_packed_pixels(packed);
         timing.readback_normalize_ms += duration_ms(readback_started.elapsed());
         let stats = compute_frame_stats(&frame, config.width, config.height);
+        let metal_telemetry = backend.probe_telemetry();
+        if config.timing {
+            timing
+                .stage_timings
+                .push(ProbeMetalFrameStageTiming::from_metal(
+                    frame_idx,
+                    &metal_telemetry,
+                ));
+        }
         let telemetry = if config.stage_telemetry {
-            Some(ProbeMetalStageTelemetry::from(backend.probe_telemetry()))
+            Some(ProbeMetalStageTelemetry::from(metal_telemetry))
         } else {
             None
         };
@@ -973,6 +999,37 @@ impl From<super::metal::MetalProbeTelemetry> for ProbeMetalStageTelemetry {
             retry_count: value.retry_count,
             overflow_flag: value.overflow_flag,
             tile_density: ProbeMetalTileDensityTelemetry::from(value.tile_density),
+            stage_timings: value.stage_timings[..value.stage_timing_count]
+                .iter()
+                .copied()
+                .map(ProbeMetalStageTiming::from)
+                .collect(),
+        }
+    }
+}
+
+#[cfg(feature = "metal")]
+impl From<super::metal::MetalStageTimingTelemetry> for ProbeMetalStageTiming {
+    fn from(value: super::metal::MetalStageTimingTelemetry) -> Self {
+        Self {
+            stage: value.stage,
+            ok: value.ok,
+            encode_ms: value.encode_ms,
+            wait_ms: value.wait_ms,
+        }
+    }
+}
+
+#[cfg(feature = "metal")]
+impl ProbeMetalFrameStageTiming {
+    fn from_metal(frame: usize, telemetry: &super::metal::MetalProbeTelemetry) -> Self {
+        Self {
+            frame,
+            stages: telemetry.stage_timings[..telemetry.stage_timing_count]
+                .iter()
+                .copied()
+                .map(ProbeMetalStageTiming::from)
+                .collect(),
         }
     }
 }
@@ -2009,6 +2066,7 @@ fn backend_timing_json(timing: &ProbeBackendTiming) -> String {
     } else {
         timing.render_ms / timing.frames as f64
     };
+    let stage_timings = metal_frame_stage_timings_json(&timing.stage_timings);
     format!(
         concat!(
             "{{",
@@ -2018,7 +2076,8 @@ fn backend_timing_json(timing: &ProbeBackendTiming) -> String {
             "\"render_ms\":{:.6},",
             "\"render_avg_ms\":{:.6},",
             "\"readback_normalize_ms\":{:.6},",
-            "\"artifact_write_ms\":{:.6}",
+            "\"artifact_write_ms\":{:.6},",
+            "\"stage_timings\":{}",
             "}}"
         ),
         timing.frames,
@@ -2027,7 +2086,8 @@ fn backend_timing_json(timing: &ProbeBackendTiming) -> String {
         timing.render_ms,
         avg_render_ms,
         timing.readback_normalize_ms,
-        timing.artifact_write_ms
+        timing.artifact_write_ms,
+        stage_timings
     )
 }
 
@@ -2060,6 +2120,7 @@ fn write_timing_json(path: &Path, timing: &ProbeTimingSummary) -> io::Result<()>
 }
 
 fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
+    let stage_timings = metal_stage_timings_json(&telemetry.stage_timings);
     format!(
         concat!(
             "{{",
@@ -2077,7 +2138,8 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
             "\"valid_count\":{},",
             "\"retry_count\":{},",
             "\"overflow_flag\":{},",
-            "\"tile_density\":{}",
+            "\"tile_density\":{},",
+            "\"stage_timings\":{}",
             "}}"
         ),
         telemetry.tile_count_x,
@@ -2094,8 +2156,48 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
         telemetry.valid_count,
         telemetry.retry_count,
         telemetry.overflow_flag,
-        metal_tile_density_telemetry_json(&telemetry.tile_density)
+        metal_tile_density_telemetry_json(&telemetry.tile_density),
+        stage_timings
     )
+}
+
+fn metal_stage_timings_json(timings: &[ProbeMetalStageTiming]) -> String {
+    let stages = timings
+        .iter()
+        .map(|timing| {
+            format!(
+                concat!(
+                    "{{",
+                    "\"stage\":\"{}\",",
+                    "\"ok\":{},",
+                    "\"encode_ms\":{:.6},",
+                    "\"wait_ms\":{:.6}",
+                    "}}"
+                ),
+                json_escape(timing.stage),
+                timing.ok,
+                timing.encode_ms,
+                timing.wait_ms
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", stages)
+}
+
+fn metal_frame_stage_timings_json(timings: &[ProbeMetalFrameStageTiming]) -> String {
+    let frames = timings
+        .iter()
+        .map(|timing| {
+            format!(
+                "{{\"frame\":{},\"stages\":{}}}",
+                timing.frame,
+                metal_stage_timings_json(&timing.stages)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", frames)
 }
 
 fn metal_tile_density_telemetry_json(telemetry: &ProbeMetalTileDensityTelemetry) -> String {
@@ -2847,6 +2949,53 @@ mod tests {
     }
 
     #[test]
+    fn probe_metal_stage_timing_json_is_structured() {
+        let telemetry = ProbeMetalStageTelemetry {
+            tile_count_x: 2,
+            tile_count_y: 3,
+            num_tiles: 6,
+            tile_capacity: 6,
+            sort_capacity_before: 16,
+            sort_capacity_after: 16,
+            estimated_overlaps: 12,
+            attempt_sort_count: 12,
+            sort_path: "fused",
+            previous_total_overlaps: 0,
+            actual_total_overlaps: 4,
+            valid_count: 2,
+            retry_count: 0,
+            overflow_flag: 0,
+            tile_density: ProbeMetalTileDensityTelemetry::default(),
+            stage_timings: vec![ProbeMetalStageTiming {
+                stage: "fused_render_attempt",
+                ok: true,
+                encode_ms: 1.25,
+                wait_ms: 2.5,
+            }],
+        };
+        let json = metal_stage_telemetry_json(&telemetry);
+
+        assert!(json.contains("\"stage_timings\""));
+        assert!(json.contains("\"stage\":\"fused_render_attempt\""));
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"encode_ms\":1.250000"));
+        assert!(json.contains("\"wait_ms\":2.500000"));
+
+        let timing = ProbeBackendTiming {
+            frames: 1,
+            stage_timings: vec![ProbeMetalFrameStageTiming {
+                frame: 0,
+                stages: telemetry.stage_timings,
+            }],
+            ..ProbeBackendTiming::default()
+        };
+        let timing_json = backend_timing_json(&timing);
+        assert!(timing_json.contains("\"stage_timings\""));
+        assert!(timing_json.contains("\"frame\":0"));
+        assert!(timing_json.contains("\"stage\":\"fused_render_attempt\""));
+    }
+
+    #[test]
     fn probe_run_writes_cpu_artifacts() {
         let out_dir = unique_temp_dir("probe_run_writes");
         let mut config = ProbeConfig::new(&out_dir);
@@ -2950,6 +3099,7 @@ mod tests {
         config.backend = ProbeBackendSelection::Both;
         config.frames = 1;
         config.warmup_frames = 1;
+        config.timing = true;
 
         let result = run_probe(&config, &[]).unwrap();
 
@@ -2962,6 +3112,13 @@ mod tests {
         assert!(out_dir.join("metal/frame_000.packed_u32le.bin").exists());
         assert!(out_dir.join("diff/cpu_vs_metal_frame_000.ppm").exists());
         assert!(out_dir.join("diff/summary.json").exists());
+        let timing_path = result
+            .timing_path
+            .as_ref()
+            .expect("probe timing path should be captured");
+        let timing_json = fs::read_to_string(timing_path).unwrap();
+        assert!(timing_json.contains("\"stage_timings\""));
+        assert!(timing_json.contains("\"frame\":0"));
         assert_eq!(
             result.diff_frames[0].metrics.classification,
             ProbeDiffClassification::Pass
@@ -3054,6 +3211,13 @@ mod tests {
         assert!(stage_json.contains("\"total_tile_entries\""));
         assert!(stage_json.contains("\"p99_tile_range\""));
         assert!(stage_json.contains("\"tile_ranges_ge_512\""));
+        assert!(stage_json.contains("\"stage_timings\""));
+        assert!(
+            stage_json.contains("\"stage\":\"fused_render_attempt\"")
+                || stage_json.contains("\"stage\":\"project_count_scan\"")
+        );
+        assert!(stage_json.contains("\"encode_ms\""));
+        assert!(stage_json.contains("\"wait_ms\""));
         assert_eq!(
             result.diff_frames[0].metrics.classification,
             ProbeDiffClassification::Pass

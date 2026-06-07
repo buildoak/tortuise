@@ -68,6 +68,36 @@ Metadata fields:
 The raw RGBA payload is the renderer-to-terminal payload candidate. The
 `base64_bytes` and `chunks_4096` numbers estimate Kitty escape transport cost.
 
+## Replay / Transport Measurement
+
+Existing `.rgba` probe payloads can be measured without rendering or opening a
+terminal:
+
+```bash
+cargo run --release -- \
+  --kitty-replay target/kitty-bench-20260607-1524/calibration/bee_256_192/kitty/metal_frame_000.rgba
+```
+
+If the sidecar JSON is missing, pass dimensions explicitly:
+
+```bash
+cargo run --release -- \
+  --kitty-replay path/to/frame.rgba \
+  --kitty-replay-size 256x192
+```
+
+The command prints JSON with:
+
+- `variants`: measured full-frame Kitty payload variants:
+  - `format: "rgba"`, `kitty_f: 32`
+  - `format: "rgb"`, `kitty_f: 24`
+- `payload_bytes`, `base64_bytes`, `chunks`, and `encode_ms` per variant.
+- `downscale_estimates` for 1x, 1/2, and 1/4 byte budgets. These are
+  deterministic transport estimates only; they do not resample pixels.
+
+Use `--kitty-replay-chunk-size N` to estimate a chunk size other than the live
+4096-byte base64 chunks.
+
 ## Current 64x48 Smoke
 
 Command:

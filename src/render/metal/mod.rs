@@ -30,7 +30,17 @@ pub struct MetalTileDensityTelemetry {
     pub tile_ranges_ge_8192: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MetalStageTimingTelemetry {
+    pub stage: &'static str,
+    pub ok: bool,
+    pub encode_ms: f64,
+    pub wait_ms: f64,
+}
+
+const MAX_METAL_STAGE_TIMINGS: usize = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetalProbeTelemetry {
     pub tile_count_x: u32,
     pub tile_count_y: u32,
@@ -47,6 +57,8 @@ pub struct MetalProbeTelemetry {
     pub retry_count: u32,
     pub overflow_flag: u32,
     pub tile_density: MetalTileDensityTelemetry,
+    pub stage_timings: [MetalStageTimingTelemetry; MAX_METAL_STAGE_TIMINGS],
+    pub stage_timing_count: usize,
 }
 
 pub struct MetalBackend {
@@ -117,6 +129,9 @@ pub struct MetalBackend {
     pub(super) last_overflow_flag: u32,
     pub(super) last_tile_density: MetalTileDensityTelemetry,
     pub(super) probe_stage_telemetry_enabled: bool,
+    pub(super) probe_stage_timing_enabled: bool,
+    pub(super) last_stage_timings: [MetalStageTimingTelemetry; MAX_METAL_STAGE_TIMINGS],
+    pub(super) last_stage_timing_count: usize,
     pub(super) last_halfblock_cols: usize,
     pub(super) last_halfblock_rows: usize,
 }
@@ -155,10 +170,28 @@ impl MetalBackend {
             retry_count: self.last_retry_count,
             overflow_flag: self.last_overflow_flag,
             tile_density: self.last_tile_density,
+            stage_timings: self.last_stage_timings,
+            stage_timing_count: self.last_stage_timing_count,
         }
     }
 
     pub fn set_probe_stage_telemetry_enabled(&mut self, enabled: bool) {
         self.probe_stage_telemetry_enabled = enabled;
+    }
+
+    pub fn set_probe_stage_timing_enabled(&mut self, enabled: bool) {
+        self.probe_stage_timing_enabled = enabled;
+    }
+
+    pub(super) fn clear_stage_timings(&mut self) {
+        self.last_stage_timings = [MetalStageTimingTelemetry::default(); MAX_METAL_STAGE_TIMINGS];
+        self.last_stage_timing_count = 0;
+    }
+
+    pub(super) fn record_stage_timing(&mut self, timing: MetalStageTimingTelemetry) {
+        if self.last_stage_timing_count < MAX_METAL_STAGE_TIMINGS {
+            self.last_stage_timings[self.last_stage_timing_count] = timing;
+            self.last_stage_timing_count += 1;
+        }
     }
 }

@@ -1,7 +1,6 @@
 pub mod frame;
 mod frame_halfblock;
-#[cfg(feature = "metal")]
-mod frame_kitty;
+pub mod frame_kitty;
 pub mod hud;
 #[cfg(feature = "metal")]
 pub mod metal;

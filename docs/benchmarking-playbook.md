@@ -25,6 +25,8 @@ Each probe case should preserve:
 - `cpu/frame_000.ppm` and `cpu/frame_000.json` for CPU runs
 - `metal/frame_000.ppm`, `metal/frame_000.json`, and
   `metal/frame_000.packed_u32le.bin` for Metal runs
+- `metal/stage_telemetry_frame_000.json` when `--probe-stage-telemetry` is
+  used; this includes Metal tile pressure plus per-stage encode/wait timings
 - `diff/summary.json` and `inspect/diff/cpu_vs_metal_frame_000.xN.png` for
   CPU-vs-Metal runs
 - `terminal/*_frame_000.ansi.txt` when `--probe-terminal` is used
@@ -157,7 +159,7 @@ Tile pressure requires `--probe-stage-telemetry`.
 Check:
 
 ```bash
-jq '{sort_path,actual_total_overlaps,valid_count,attempt_sort_count,overflow_flag,tile_density}' \
+jq '{sort_path,actual_total_overlaps,valid_count,attempt_sort_count,overflow_flag,tile_density,stage_timings}' \
   "$OUT/$LABEL/metal/stage_telemetry_frame_000.json"
 ```
 
@@ -168,6 +170,8 @@ Rules:
 - `actual_total_overlaps` must match `tile_density.total_tile_entries`.
 - Always report `total_tile_entries`, `max_tile_range`, `p99_tile_range`, and
   `tile_ranges_ge_8192`.
+- Stage timing evidence must come from structured JSON, not stderr scraping.
+  `TORTUISE_METAL_STAGE_TIMING=1` remains a live-debug aid only.
 
 Tile pressure tiers, using entries per pixel:
 
@@ -211,6 +215,17 @@ cargo run --features metal --release -- "$SCENE" \
 ```
 
 Compare `render_avg_ms`, not wall time and not artifact write time.
+
+When `--probe-timing` or `--probe-benchmark-frames` is enabled, Metal per-frame
+stage timings are also written to `probe_timing.json`:
+
+```bash
+jq '.metal.stage_timings[] | {frame, stages}' \
+  "$OUT/$LABEL-metal/probe_timing.json"
+```
+
+For `--probe-stage-telemetry` runs, the same stage records are available next to
+tile pressure in `metal/stage_telemetry_frame_000.json`.
 
 Benchmark decision rules:
 

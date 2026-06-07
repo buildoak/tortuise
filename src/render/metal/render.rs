@@ -118,6 +118,7 @@ impl MetalBackend {
             self.last_retry_count = 0;
             self.last_overflow_flag = 0;
             self.last_tile_density = Default::default();
+            self.clear_stage_timings();
 
             self.ensure_framebuffer_capacity(screen_width, screen_height)?;
             if splat_count == 0 {
@@ -142,6 +143,7 @@ impl MetalBackend {
                 let attempt_sort_count = estimated_overlaps.min(self.sort_capacity).max(1);
                 self.last_estimated_overlaps = estimated_overlaps;
                 self.last_attempt_sort_count = attempt_sort_count;
+                self.clear_stage_timings();
 
                 let result = run_single_render_attempt(
                     self,

@@ -5,6 +5,7 @@ use crossterm::{
     execute,
     terminal::{self, ClearType, EnterAlternateScreen},
 };
+use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -114,6 +115,25 @@ struct Cli {
     probe_terminal: bool,
     #[arg(long, help = "Also emit Kitty-ready raw RGBA probe payload artifacts")]
     probe_kitty_payload: bool,
+    #[arg(
+        long,
+        value_name = "RGBA",
+        help = "Measure Kitty transport payload variants for an existing probe .rgba file and exit"
+    )]
+    kitty_replay: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "WxH",
+        help = "Dimensions for --kitty-replay when no sidecar JSON is available"
+    )]
+    kitty_replay_size: Option<String>,
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = render::frame_kitty::KITTY_DIRECT_CHUNK_SIZE,
+        help = "Base64 chunk size for --kitty-replay estimates"
+    )]
+    kitty_replay_chunk_size: usize,
     #[arg(long, help = "Exit nonzero when CPU/Metal probe comparison mismatches")]
     probe_fail_on_mismatch: bool,
     #[cfg(feature = "metal")]
@@ -351,9 +371,80 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     Ok(())
 }
 
+fn json_usize_field(json: &str, field: &str) -> Option<usize> {
+    let key = format!("\"{field}\"");
+    let start = json.find(&key)?;
+    let after_key = &json[start + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let digit_len = after_colon
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digit_len == 0 {
+        return None;
+    }
+    after_colon[..digit_len].parse().ok()
+}
+
+fn infer_kitty_replay_size(
+    path: &PathBuf,
+    explicit_size: Option<&str>,
+) -> AppResult<(usize, usize)> {
+    if let Some(raw) = explicit_size {
+        return parse_probe_size(raw);
+    }
+
+    let metadata_path = path.with_extension("json");
+    let metadata = fs::read_to_string(&metadata_path).map_err(|err| {
+        format!(
+            "Could not read Kitty replay sidecar '{}': {err}. Pass --kitty-replay-size WxH.",
+            metadata_path.display()
+        )
+    })?;
+    let width = json_usize_field(&metadata, "width").ok_or_else(|| {
+        format!(
+            "Kitty replay sidecar '{}' is missing numeric field 'width'",
+            metadata_path.display()
+        )
+    })?;
+    let height = json_usize_field(&metadata, "height").ok_or_else(|| {
+        format!(
+            "Kitty replay sidecar '{}' is missing numeric field 'height'",
+            metadata_path.display()
+        )
+    })?;
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "Kitty replay sidecar '{}' has zero dimensions {width}x{height}",
+            metadata_path.display()
+        )
+        .into());
+    }
+    Ok((width, height))
+}
+
+fn run_kitty_replay(cli: &Cli, path: PathBuf) -> AppResult<()> {
+    let (width, height) = infer_kitty_replay_size(&path, cli.kitty_replay_size.as_deref())?;
+    let rgba = fs::read(&path)?;
+    let json = render::frame_kitty::kitty_replay_report_json(
+        &path.display().to_string(),
+        width,
+        height,
+        &rgba,
+        cli.kitty_replay_chunk_size,
+    )?;
+    println!("{json}");
+    Ok(())
+}
+
 fn main() -> AppResult<()> {
     install_panic_hook();
     let cli = Cli::parse();
+
+    if let Some(path) = cli.kitty_replay.clone() {
+        return run_kitty_replay(&cli, path);
+    }
 
     if let Some(out_dir) = cli.render_probe.clone() {
         return run_render_probe(&cli, out_dir);
@@ -533,5 +624,14 @@ mod tests {
         assert!(err.to_string().contains("--probe-inspect-scale"));
         validate_probe_inspect_scale(1).unwrap();
         validate_probe_inspect_scale(4).unwrap();
+    }
+
+    #[test]
+    fn json_usize_field_reads_probe_sidecar_dimensions() {
+        let json = "{\"format\":\"rgba8\",\"width\":256,\"height\":192}";
+
+        assert_eq!(json_usize_field(json, "width"), Some(256));
+        assert_eq!(json_usize_field(json, "height"), Some(192));
+        assert_eq!(json_usize_field(json, "missing"), None);
     }
 }
