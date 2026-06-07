@@ -92,6 +92,8 @@ kernel void emit_tile_keys(
     constant TileConfig& tile_config [[buffer(6)]],
     device atomic_uint* overflow_flag [[buffer(7)]],
     constant uint& sort_capacity [[buffer(8)]],
+    constant uint& key_mode [[buffer(9)]],
+    constant uint& approx_depth_bits [[buffer(10)]],
     uint index [[thread_position_in_grid]]
 ) {
     if (index >= valid_count) {
@@ -135,10 +137,18 @@ kernel void emit_tile_keys(
                 return;
             }
 
-            sort_keys[slot] =
-                (uint64_t(tile_id) << 54) |
-                (uint64_t(depth_key) << 22) |
-                uint64_t(index_key);
+            if (key_mode == 1u) {
+                const uint safe_depth_bits = clamp(approx_depth_bits, 1u, 22u);
+                const uint depth_bin = depth_key >> (32u - safe_depth_bits);
+                sort_keys[slot] =
+                    (uint64_t(tile_id) << safe_depth_bits) |
+                    uint64_t(depth_bin);
+            } else {
+                sort_keys[slot] =
+                    (uint64_t(tile_id) << 54) |
+                    (uint64_t(depth_key) << 22) |
+                    uint64_t(index_key);
+            }
             sort_values[slot] = index;
         }
     }

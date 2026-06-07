@@ -119,13 +119,28 @@ impl MetalBackend {
         num_elements: u32,
         keys_in_a: &mut bool,
     ) -> Result<(), MetalRenderError> {
+        self.run_radix_sort_passes_for_offsets(
+            command_buffer,
+            num_elements,
+            keys_in_a,
+            &RADIX_SORT_BIT_OFFSETS,
+        )
+    }
+
+    pub(super) fn run_radix_sort_passes_for_offsets(
+        &self,
+        command_buffer: &metal::CommandBufferRef,
+        num_elements: u32,
+        keys_in_a: &mut bool,
+        bit_offsets: &[u32],
+    ) -> Result<(), MetalRenderError> {
         let num_blocks = div_ceil_u32(num_elements.max(1), THREADS_PER_GROUP_1D).max(1);
         let histogram_count = num_blocks
             .checked_mul(RADIX_BUCKETS)
             .ok_or_else(|| MetalRenderError::Other("histogram count overflow".to_string()))?;
         let histogram_bytes = histogram_count as u64 * mem::size_of::<u32>() as u64;
 
-        for bit_offset in RADIX_SORT_BIT_OFFSETS {
+        for &bit_offset in bit_offsets {
             let blit = command_buffer.new_blit_command_encoder();
             blit.fill_buffer(&self.radix_histograms, NSRange::new(0, histogram_bytes), 0);
             blit.end_encoding();

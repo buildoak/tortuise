@@ -18,23 +18,6 @@ fn rgb_from_packed_pixel(pixel: u32) -> [u8; 3] {
     ]
 }
 
-#[cfg(feature = "metal")]
-fn build_halfblock_cells_from_gpu_cells(
-    gpu_cells: &[crate::render::metal::GpuHalfblockCell],
-    term_cols: usize,
-    term_rows: usize,
-    out: &mut Vec<HalfblockCell>,
-) {
-    out.clear();
-    out.resize(term_cols * term_rows, ([0u8; 3], [0u8; 3]));
-    for (idx, cell) in gpu_cells.iter().take(out.len()).enumerate() {
-        out[idx] = (
-            rgb_from_packed_pixel(cell.top_rgb),
-            rgb_from_packed_pixel(cell.bottom_rgb),
-        );
-    }
-}
-
 fn build_halfblock_cells_rgb(
     fb: &[[u8; 3]],
     ss_width: usize,
@@ -128,6 +111,109 @@ fn write_ansi_command(buf: &mut String, command: impl Command) -> io::Result<()>
         .map_err(|_| io::Error::other("failed to encode ANSI command"))
 }
 
+fn write_halfblock_cells_ansi(
+    cells: &[HalfblockCell],
+    term_cols: usize,
+    term_rows: usize,
+    show_hud: bool,
+    use_truecolor: bool,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let mut last_bg: Option<(u8, u8, u8)> = None;
+    let mut last_fg: Option<(u8, u8, u8)> = None;
+    let mut row_buf = String::with_capacity(term_cols * 8 + 32);
+
+    for term_row in 0..term_rows {
+        if super::modes::is_hud_overlay_row(show_hud, term_row, term_rows) {
+            last_bg = None;
+            last_fg = None;
+            continue;
+        }
+
+        row_buf.clear();
+        write_ansi_command(&mut row_buf, cursor::MoveTo(0, term_row as u16))?;
+
+        for x in 0..term_cols {
+            let (top, bottom) = cells[term_row * term_cols + x];
+            let bg = (top[0], top[1], top[2]);
+            let fg = (bottom[0], bottom[1], bottom[2]);
+
+            if last_bg != Some(bg) {
+                write_ansi_command(
+                    &mut row_buf,
+                    SetBackgroundColor(make_color(bg.0, bg.1, bg.2, use_truecolor)),
+                )?;
+                last_bg = Some(bg);
+            }
+            if last_fg != Some(fg) {
+                write_ansi_command(
+                    &mut row_buf,
+                    SetForegroundColor(make_color(fg.0, fg.1, fg.2, use_truecolor)),
+                )?;
+                last_fg = Some(fg);
+            }
+            row_buf.push(HALF_BLOCK);
+        }
+
+        stdout.write_all(row_buf.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "metal")]
+fn write_gpu_halfblock_cells_ansi(
+    gpu_cells: &[crate::render::metal::GpuHalfblockCell],
+    term_cols: usize,
+    term_rows: usize,
+    show_hud: bool,
+    use_truecolor: bool,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let mut last_bg: Option<(u8, u8, u8)> = None;
+    let mut last_fg: Option<(u8, u8, u8)> = None;
+    let mut row_buf = String::with_capacity(term_cols * 8 + 32);
+
+    for term_row in 0..term_rows {
+        if super::modes::is_hud_overlay_row(show_hud, term_row, term_rows) {
+            last_bg = None;
+            last_fg = None;
+            continue;
+        }
+
+        row_buf.clear();
+        write_ansi_command(&mut row_buf, cursor::MoveTo(0, term_row as u16))?;
+
+        for x in 0..term_cols {
+            let cell = gpu_cells[term_row * term_cols + x];
+            let top = rgb_from_packed_pixel(cell.top_rgb);
+            let bottom = rgb_from_packed_pixel(cell.bottom_rgb);
+            let bg = (top[0], top[1], top[2]);
+            let fg = (bottom[0], bottom[1], bottom[2]);
+
+            if last_bg != Some(bg) {
+                write_ansi_command(
+                    &mut row_buf,
+                    SetBackgroundColor(make_color(bg.0, bg.1, bg.2, use_truecolor)),
+                )?;
+                last_bg = Some(bg);
+            }
+            if last_fg != Some(fg) {
+                write_ansi_command(
+                    &mut row_buf,
+                    SetForegroundColor(make_color(fg.0, fg.1, fg.2, use_truecolor)),
+                )?;
+                last_fg = Some(fg);
+            }
+            row_buf.push(HALF_BLOCK);
+        }
+
+        stdout.write_all(row_buf.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 pub fn render_halfblock_frame(
     app_state: &mut AppState,
     term_cols: usize,
@@ -168,11 +254,13 @@ pub fn render_halfblock_frame(
             .map(|mb| mb.halfblock_cells_slice())
             .unwrap_or(&[]);
         if gpu_cells.len() == term_cols.saturating_mul(term_rows) {
-            build_halfblock_cells_from_gpu_cells(
+            return write_gpu_halfblock_cells_ansi(
                 gpu_cells,
                 term_cols,
                 term_rows,
-                &mut app_state.halfblock_cells,
+                app_state.show_hud,
+                app_state.use_truecolor,
+                stdout,
             );
         } else {
             let packed = app_state
@@ -216,46 +304,7 @@ pub fn render_halfblock_frame(
     let use_truecolor = app_state.use_truecolor;
     let show_hud = app_state.show_hud;
     let cells = &app_state.halfblock_cells;
-    let mut last_bg: Option<(u8, u8, u8)> = None;
-    let mut last_fg: Option<(u8, u8, u8)> = None;
-    let mut row_buf = String::with_capacity(term_cols * 8 + 32);
-
-    for term_row in 0..term_rows {
-        if super::modes::is_hud_overlay_row(show_hud, term_row, term_rows) {
-            last_bg = None;
-            last_fg = None;
-            continue;
-        }
-
-        row_buf.clear();
-        write_ansi_command(&mut row_buf, cursor::MoveTo(0, term_row as u16))?;
-
-        for x in 0..term_cols {
-            let (top, bottom) = cells[term_row * term_cols + x];
-            let bg = (top[0], top[1], top[2]);
-            let fg = (bottom[0], bottom[1], bottom[2]);
-
-            if last_bg != Some(bg) {
-                write_ansi_command(
-                    &mut row_buf,
-                    SetBackgroundColor(make_color(bg.0, bg.1, bg.2, use_truecolor)),
-                )?;
-                last_bg = Some(bg);
-            }
-            if last_fg != Some(fg) {
-                write_ansi_command(
-                    &mut row_buf,
-                    SetForegroundColor(make_color(fg.0, fg.1, fg.2, use_truecolor)),
-                )?;
-                last_fg = Some(fg);
-            }
-            row_buf.push(HALF_BLOCK);
-        }
-
-        stdout.write_all(row_buf.as_bytes())?;
-    }
-
-    Ok(())
+    write_halfblock_cells_ansi(cells, term_cols, term_rows, show_hud, use_truecolor, stdout)
 }
 
 #[cfg(feature = "metal")]
