@@ -145,6 +145,13 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(long, help = "Start in Kitty graphics protocol render mode")]
     kitty: bool,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "exact|fast-preview|turbo",
+        help = "Metal quality tier; exact preserves correctness, fast-preview/turbo are approximate"
+    )]
+    metal_quality: Option<String>,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -275,6 +282,9 @@ fn validate_probe_inspect_scale(scale: usize) -> AppResult<()> {
 }
 
 fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
+    #[cfg(feature = "metal")]
+    apply_metal_quality_override(cli)?;
+
     let (width, height) = parse_probe_size(&cli.probe_size)?;
     validate_probe_fov_deg(cli.probe_fov_deg)?;
     validate_probe_inspect_scale(cli.probe_inspect_scale)?;
@@ -371,6 +381,25 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "metal")]
+fn apply_metal_quality_override(cli: &Cli) -> AppResult<()> {
+    if let Some(raw) = cli.metal_quality.as_deref() {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "exact" | "fast-preview" | "fast_preview" | "preview" | "fast" | "turbo" => {
+                std::env::set_var("TORTUISE_METAL_QUALITY", normalized);
+            }
+            _ => {
+                return Err(format!(
+                    "Invalid --metal-quality '{raw}'. Expected exact, fast-preview, or turbo"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn json_usize_field(json: &str, field: &str) -> Option<usize> {
     let key = format!("\"{field}\"");
     let start = json.find(&key)?;
@@ -455,6 +484,9 @@ fn main() -> AppResult<()> {
         println!();
         std::process::exit(0);
     }
+
+    #[cfg(feature = "metal")]
+    apply_metal_quality_override(&cli)?;
 
     #[cfg(feature = "metal")]
     let mut backend = if cli.cpu {
@@ -624,6 +656,18 @@ mod tests {
         assert!(err.to_string().contains("--probe-inspect-scale"));
         validate_probe_inspect_scale(1).unwrap();
         validate_probe_inspect_scale(4).unwrap();
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_quality_validation_rejects_unknown_values() {
+        let mut cli = Cli::parse_from(["tortuise", "--metal-quality", "fast-preview"]);
+        apply_metal_quality_override(&cli).unwrap();
+        std::env::remove_var("TORTUISE_METAL_QUALITY");
+
+        cli.metal_quality = Some("wat".to_string());
+        let err = apply_metal_quality_override(&cli).unwrap_err();
+        assert!(err.to_string().contains("Invalid --metal-quality"));
     }
 
     #[test]

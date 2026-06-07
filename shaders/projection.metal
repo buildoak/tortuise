@@ -183,6 +183,24 @@ float2 compute_snug_tile_extent(float3 cov) {
     );
 }
 
+float2 compute_fast_opacity_tile_extent(float3 cov, float opacity, float alpha_cutoff) {
+    // Fast-preview mode is allowed to drop contributions whose peak alpha is
+    // below the configured cutoff.  For the remaining splats, solve
+    // opacity * exp(-0.5q) >= alpha_cutoff for q and convert the axis-aligned
+    // covariance diagonal to a tighter pixel extent.
+    const float safe_opacity = max(opacity, 1e-6f);
+    const float safe_cutoff = clamp(alpha_cutoff, 1e-6f, 0.05f);
+    if (safe_opacity <= safe_cutoff) {
+        return float2(0.0f, 0.0f);
+    }
+    const float q_cutoff = max(-2.0f * log(safe_cutoff / safe_opacity), 0.25f);
+    const float sigma_cutoff = min(sqrt(q_cutoff), 4.0f);
+    return float2(
+        sigma_cutoff * sqrt(max(cov.x, 0.0f)),
+        sigma_cutoff * sqrt(max(cov.z, 0.0f))
+    );
+}
+
 kernel void project_splats(
     constant SplatData* splats [[buffer(0)]],
     device ProjectedSplat* projected_splats [[buffer(1)]],
@@ -191,6 +209,8 @@ kernel void project_splats(
     constant uint& splat_count [[buffer(4)]],
     constant TileConfig& tile_config [[buffer(5)]],
     constant uint& use_snug_tile_bounds [[buffer(6)]],
+    constant uint& fast_quality [[buffer(7)]],
+    constant float& fast_alpha_cutoff [[buffer(8)]],
     uint index [[thread_position_in_grid]]
 ) {
     if (index >= splat_count) {
@@ -246,9 +266,17 @@ kernel void project_splats(
     if (extent.x < 0.3 || extent.y < 0.3) {
         return;
     }
-    const float2 tile_extent = use_snug_tile_bounds != 0u
+    float2 tile_extent = use_snug_tile_bounds != 0u
         ? compute_snug_tile_extent(cov_2d)
         : extent;
+    float2 render_extent = extent;
+    if (fast_quality != 0u) {
+        tile_extent = compute_fast_opacity_tile_extent(cov_2d, splat.opacity, fast_alpha_cutoff);
+        if (tile_extent.x < 0.3f || tile_extent.y < 0.3f) {
+            return;
+        }
+        render_extent = tile_extent;
+    }
 
     // Compute tile bounds from the same inclusive integer bbox used by the CPU
     // rasterizer/probe telemetry: floor(min edge), ceil(max edge), then clamp to screen.
@@ -278,7 +306,7 @@ kernel void project_splats(
 
     projected_splats[output_index] = {
         screen_x, screen_y, view_pos.z,
-        extent.x, extent.y,
+        render_extent.x, render_extent.y,
         cov_2d.x, cov_2d.y, cov_2d.z,
         splat.opacity,
         splat.packed_color,

@@ -33,6 +33,7 @@ kernel void rasterize_tiles(
     constant TileConfig& tile_config [[buffer(5)]],
     constant uint& sort_capacity [[buffer(6)]],
     device atomic_uint* overflow_flag [[buffer(7)]],
+    constant uint& fast_quality [[buffer(8)]],
     uint2 threadgroup_pos [[threadgroup_position_in_grid]],
     uint2 local_pos [[thread_position_in_threadgroup]],
     uint linear_tid [[thread_index_in_threadgroup]])
@@ -155,18 +156,22 @@ kernel void rasterize_tiles(
 
                 // Quadratic form for Gaussian exponent: q = [dx dy] * inv_cov * [dx dy]^T.
                 const float q = dx * dx * inv_a + 2.0f * dx * dy * inv_b + dy * dy * inv_c;
-                if (q > 32.0f) {
+                const float q_limit = fast_quality != 0u ? 24.0f : 32.0f;
+                if (q > q_limit) {
                     continue;
                 }
 
                 const float g = exp(-0.5f * q);
-                if (g < MIN_GAUSSIAN_CONTRIB) {
+                const float min_gaussian_contrib =
+                    fast_quality != 0u ? 0.002f : MIN_GAUSSIAN_CONTRIB;
+                if (g < min_gaussian_contrib) {
                     continue;
                 }
 
                 const float alpha = shared_opacity[i] * g;
                 const float weight = alpha * transmittance;
-                if (weight < 1e-4f) {
+                const float min_weight = fast_quality != 0u ? 5e-4f : 1e-4f;
+                if (weight < min_weight) {
                     continue;
                 }
 
@@ -178,9 +183,15 @@ kernel void rasterize_tiles(
                 // CPU-equivalent front-to-back accumulation. The CPU framebuffer stores
                 // u8 channels and truncates after each splat contribution, not just at
                 // final framebuffer writeback.
-                color_r = floor(clamp(color_r + splat_r * weight, 0.0f, 255.0f));
-                color_g = floor(clamp(color_g + splat_g * weight, 0.0f, 255.0f));
-                color_b = floor(clamp(color_b + splat_b * weight, 0.0f, 255.0f));
+                if (fast_quality != 0u) {
+                    color_r = clamp(color_r + splat_r * weight, 0.0f, 255.0f);
+                    color_g = clamp(color_g + splat_g * weight, 0.0f, 255.0f);
+                    color_b = clamp(color_b + splat_b * weight, 0.0f, 255.0f);
+                } else {
+                    color_r = floor(clamp(color_r + splat_r * weight, 0.0f, 255.0f));
+                    color_g = floor(clamp(color_g + splat_g * weight, 0.0f, 255.0f));
+                    color_b = floor(clamp(color_b + splat_b * weight, 0.0f, 255.0f));
+                }
 
                 transmittance *= (1.0f - alpha);
                 transmittance = max(transmittance, 0.0f);

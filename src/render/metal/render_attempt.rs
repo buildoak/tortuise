@@ -24,6 +24,8 @@ const METAL_LOCAL_TILE_SORT_ENV: &str = "TORTUISE_METAL_LOCAL_TILE_SORT";
 const METAL_FAST_UNSORTED_ENV: &str = "TORTUISE_METAL_FAST_UNSORTED";
 const METAL_FAST_APPROX_ENV: &str = "TORTUISE_METAL_FAST_APPROX";
 const METAL_FAST_DEPTH_BITS_ENV: &str = "TORTUISE_METAL_FAST_DEPTH_BITS";
+const METAL_FAST_ALPHA_CUTOFF_ENV: &str = "TORTUISE_METAL_FAST_ALPHA_CUTOFF";
+const METAL_QUALITY_ENV: &str = "TORTUISE_METAL_QUALITY";
 const METAL_SNUG_TILE_BOUNDS_ENV: &str = "TORTUISE_METAL_SNUG_TILE_BOUNDS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,8 @@ enum MetalSortPath {
     Hybrid,
     FastUnsorted,
     CoarseDepthApprox,
+    FastPreview,
+    Turbo,
 }
 
 impl MetalSortPath {
@@ -41,7 +45,21 @@ impl MetalSortPath {
             Self::Hybrid => "hybrid",
             Self::FastUnsorted => "fast-unsorted",
             Self::CoarseDepthApprox => "coarse-depth",
+            Self::FastPreview => "fast-preview",
+            Self::Turbo => "turbo",
         }
+    }
+
+    fn approximate_depth_enabled(self) -> bool {
+        matches!(self, Self::CoarseDepthApprox)
+    }
+
+    fn fast_unsorted_enabled(self) -> bool {
+        matches!(self, Self::FastUnsorted | Self::Turbo)
+    }
+
+    fn fast_quality_enabled(self) -> bool {
+        matches!(self, Self::FastPreview | Self::Turbo)
     }
 }
 
@@ -96,9 +114,11 @@ fn run_single_render_attempt_fused(
     let stage_timing_enabled = metal_stage_timing_enabled();
     let capture_stage_timing = stage_timing_enabled || backend.probe_stage_timing_enabled;
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
-    let fast_unsorted_enabled = sort_path == MetalSortPath::FastUnsorted;
-    let approximate_depth_enabled = sort_path == MetalSortPath::CoarseDepthApprox;
+    let fast_unsorted_enabled = sort_path.fast_unsorted_enabled();
+    let approximate_depth_enabled = sort_path.approximate_depth_enabled();
+    let fast_quality_enabled = sort_path.fast_quality_enabled();
     let approximate_depth_bits = metal_fast_depth_bits();
+    let fast_alpha_cutoff = metal_fast_alpha_cutoff();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
@@ -213,6 +233,8 @@ fn run_single_render_attempt_fused(
     );
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
     set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
+    set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
+    set_bytes_f32(encoder, 8, fast_alpha_cutoff);
     dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
@@ -340,6 +362,7 @@ fn run_single_render_attempt_fused(
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
     set_bytes_u32(encoder, 6, attempt_sort_count_u32);
     encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
+    set_bytes_u32(encoder, 8, u32::from(fast_quality_enabled));
     debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
     encoder.dispatch_thread_groups(
         MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),
@@ -383,6 +406,8 @@ fn run_single_render_attempt_fused(
                 "\"radix_histogram_count\":{},",
                 "\"radix_passes\":{},",
                 "\"fast_unsorted\":{},",
+                "\"fast_quality\":{},",
+                "\"fast_alpha_cutoff\":{:.6},",
                 "\"snug_tile_bounds\":{}",
                 "}}"
             ),
@@ -396,6 +421,8 @@ fn run_single_render_attempt_fused(
             histogram_count,
             radix_passes,
             fast_unsorted_enabled,
+            fast_quality_enabled,
+            fast_alpha_cutoff,
             snug_tile_bounds_enabled
         );
     }
@@ -428,7 +455,12 @@ fn run_single_render_attempt_two_stage(
     let stage_timing_enabled = metal_stage_timing_enabled();
     let capture_stage_timing = stage_timing_enabled || backend.probe_stage_timing_enabled;
     let local_tile_sort_requested = metal_local_tile_sort_enabled();
-    let fast_unsorted_enabled = metal_fast_unsorted_enabled();
+    let sort_path = metal_sort_path();
+    let fast_unsorted_enabled = sort_path.fast_unsorted_enabled();
+    let fast_quality_enabled = sort_path.fast_quality_enabled();
+    let approximate_depth_enabled = sort_path.approximate_depth_enabled();
+    let approximate_depth_bits = metal_fast_depth_bits();
+    let fast_alpha_cutoff = metal_fast_alpha_cutoff();
     let snug_tile_bounds_enabled = metal_snug_tile_bounds_enabled();
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
@@ -524,6 +556,8 @@ fn run_single_render_attempt_two_stage(
     );
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
     set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
+    set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
+    set_bytes_f32(encoder, 8, fast_alpha_cutoff);
     dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
@@ -613,6 +647,8 @@ fn run_single_render_attempt_two_stage(
                 "\"num_tiles\":{},",
                 "\"tile_count_x\":{},",
                 "\"tile_count_y\":{},",
+                "\"fast_quality\":{},",
+                "\"fast_alpha_cutoff\":{:.6},",
                 "\"snug_tile_bounds\":{}",
                 "}}"
             ),
@@ -623,6 +659,8 @@ fn run_single_render_attempt_two_stage(
             num_tiles,
             tile_count_x,
             tile_count_y,
+            fast_quality_enabled,
+            fast_alpha_cutoff,
             snug_tile_bounds_enabled
         );
     }
@@ -679,8 +717,16 @@ fn run_single_render_attempt_two_stage(
     encoder.set_buffer(6, Some(&backend.tile_config_buffer), 0);
     encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
     set_bytes_u32(encoder, 8, sort_capacity_u32);
-    set_bytes_u32(encoder, 9, exact_key_mode);
-    set_bytes_u32(encoder, 10, 32);
+    set_bytes_u32(
+        encoder,
+        9,
+        if approximate_depth_enabled {
+            1
+        } else {
+            exact_key_mode
+        },
+    );
+    set_bytes_u32(encoder, 10, approximate_depth_bits);
     dispatch_1d(encoder, valid_count, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
@@ -691,6 +737,22 @@ fn run_single_render_attempt_two_stage(
             backend.encode_local_tile_sort(stage_b, num_tiles as u32);
             local_tile_sort_used = true;
             (&backend.sort_keys_b, &backend.sort_values_b)
+        } else if approximate_depth_enabled {
+            let approximate_radix_offsets =
+                approximate_radix_bit_offsets(num_tiles, approximate_depth_bits);
+            backend.run_radix_sort_passes_for_offsets(
+                stage_b,
+                dispatch_overlaps,
+                &mut keys_in_a,
+                &approximate_radix_offsets,
+            )?;
+            radix_passes = approximate_radix_offsets.len();
+            let (keys, values) = if keys_in_a {
+                (&backend.sort_keys_a, &backend.sort_values_a)
+            } else {
+                (&backend.sort_keys_b, &backend.sort_values_b)
+            };
+            (keys, values)
         } else {
             backend.run_radix_sort_passes(stage_b, dispatch_overlaps, &mut keys_in_a)?;
             radix_passes = RADIX_SORT_BIT_OFFSETS.len();
@@ -712,6 +774,7 @@ fn run_single_render_attempt_two_stage(
         encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
         set_bytes_u32(encoder, 6, dispatch_overlaps);
         encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
+        set_bytes_u32(encoder, 8, u32::from(fast_quality_enabled));
         debug_assert_eq!(TILE_SIZE, SHADER_TILE_SIZE);
         encoder.dispatch_thread_groups(
             MTLSize::new(u64::from(tile_count_x), u64::from(tile_count_y), 1),
@@ -756,6 +819,8 @@ fn run_single_render_attempt_two_stage(
                 "\"radix_passes\":{},",
                 "\"local_tile_sort\":{},",
                 "\"fast_unsorted\":{},",
+                "\"fast_quality\":{},",
+                "\"fast_alpha_cutoff\":{:.6},",
                 "\"max_tile_range\":{},",
                 "\"total_tile_entries\":{},",
                 "\"p50_tile_range\":{},",
@@ -781,6 +846,8 @@ fn run_single_render_attempt_two_stage(
             radix_passes,
             local_tile_sort_used,
             fast_unsorted_enabled,
+            fast_quality_enabled,
+            fast_alpha_cutoff,
             max_tile_range,
             tile_density.total_tile_entries,
             tile_density.p50_tile_range,
@@ -816,6 +883,20 @@ fn metal_stage_timing_enabled() -> bool {
 }
 
 fn metal_sort_path() -> MetalSortPath {
+    if let Ok(value) = std::env::var(METAL_QUALITY_ENV) {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "exact" | "fused" | "" => return MetalSortPath::Fused,
+            "fast-preview" | "fast_preview" | "preview" | "fast" => {
+                return MetalSortPath::FastPreview;
+            }
+            "turbo" | "fast-unsorted" | "fast_unsorted" | "unsorted" => {
+                return MetalSortPath::Turbo;
+            }
+            _ => {}
+        }
+    }
+
     if let Ok(value) = std::env::var(METAL_SORT_PATH_ENV) {
         let normalized = value.trim().to_ascii_lowercase();
         match normalized.as_str() {
@@ -860,6 +941,23 @@ fn metal_fast_depth_bits() -> u32 {
         .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(14)
         .clamp(1, 22)
+}
+
+fn metal_fast_alpha_cutoff() -> f32 {
+    std::env::var(METAL_FAST_ALPHA_CUTOFF_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(0.01)
+        .clamp(0.0001, 0.05)
+}
+
+fn set_bytes_f32(encoder: &metal::ComputeCommandEncoderRef, index: u64, value: f32) {
+    encoder.set_bytes(
+        index,
+        mem::size_of::<f32>() as u64,
+        &value as *const _ as *const c_void,
+    );
 }
 
 fn approximate_radix_bit_offsets(num_tiles: usize, depth_bits: u32) -> Vec<u32> {

@@ -171,6 +171,15 @@ Near-term candidate:
 
 - stabilize `coarse-depth` with deterministic tie bits before any default use
 
+Implemented first fast tier:
+
+- `--metal-quality exact` keeps the exact fused renderer.
+- `--metal-quality fast-preview` keeps exact depth ordering but enables
+  opacity-aware tile radius tightening and faster raster accumulation.
+- `--metal-quality turbo` is the aggressive unsorted diagnostic tier.
+- `TORTUISE_METAL_FAST_ALPHA_CUTOFF` tunes the fast-preview peak alpha cutoff;
+  the default is `0.01`.
+
 Gate:
 
 - visual review packet passes
