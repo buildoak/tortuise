@@ -124,14 +124,14 @@ kernel void emit_tile_keys(
         return;
     }
 
-    // Sort key layout: 10-bit tile_id | 32-bit sortable depth | 22-bit original_index
+    // Sort key layouts:
+    // key_mode 0: 10-bit tile_id | 32-bit sortable depth | 22-bit original_index
+    // key_mode 2: 16-bit tile_id | 32-bit sortable depth | 16-bit original_index
     //
-    // 10 bits supports up to 1023 tiles (a 500x160 terminal with 16x16 tiles
-    // = ~320 tiles, plenty of headroom).  The Rust render path rejects larger
-    // tile grids before this kernel is dispatched.  Full sortable f32 depth
-    // bits match CPU total_cmp ordering for finite visible depths, and 22
-    // original_index bits give a deterministic tiebreaker for loaded scenes
-    // below 4,194,304 source splats.
+    // The 10-bit mode preserves the existing 22-bit deterministic tiebreaker
+    // for normal terminal grids. The 16-bit high-tile mode unlocks Kitty-sized
+    // pixel grids up to 65,535 tiles while keeping full sortable f32 depth; it
+    // keeps a narrower original_index tiebreaker because the key is still u64.
     //
     // The atomic_fetch_add for slot assignment in emit_tile_keys remains
     // non-deterministic, but this only affects the input order fed to the
@@ -159,6 +159,11 @@ kernel void emit_tile_keys(
                 sort_keys[slot] =
                     (uint64_t(tile_id) << safe_depth_bits) |
                     uint64_t(depth_bin);
+            } else if (key_mode == 2u) {
+                sort_keys[slot] =
+                    (uint64_t(tile_id) << 48) |
+                    (uint64_t(depth_key) << 16) |
+                    uint64_t(splat.original_index & 0xFFFFu);
             } else {
                 sort_keys[slot] =
                     (uint64_t(tile_id) << 54) |

@@ -8,6 +8,7 @@ use super::types::TILE_SIZE;
 use super::MetalBackend;
 
 const MAX_SORT_KEY_ORIGINAL_INDEX: usize = (1 << 22) - 1;
+const MAX_SORT_KEY_TILE_COUNT: u64 = (1 << 16) - 1;
 const WARMED_OVERLAP_HEADROOM_NUM: usize = 5;
 const WARMED_OVERLAP_HEADROOM_DEN: usize = 4;
 const COLD_START_OVERLAP_FACTOR: usize = 8;
@@ -98,8 +99,8 @@ impl MetalBackend {
             let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
             let tile_count_y = div_ceil_u32(screen_height_u32, TILE_SIZE).max(1);
             let num_tiles_u64 = u64::from(tile_count_x) * u64::from(tile_count_y);
-            if num_tiles_u64 > 1023 {
-                return Err("Tile count exceeds 10-bit tile_id encoding (max 1023 tiles)".into());
+            if num_tiles_u64 > MAX_SORT_KEY_TILE_COUNT {
+                return Err("Tile count exceeds 16-bit Metal sort key tile_id encoding".into());
             }
             let num_tiles = usize::try_from(num_tiles_u64)?;
             let previous_num_tiles = self.last_num_tiles;

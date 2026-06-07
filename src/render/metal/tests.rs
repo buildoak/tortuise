@@ -519,3 +519,25 @@ fn test_resize_handling() {
     assert_eq!(fb_256.len(), 256 * 256);
     assert_eq!(fb_64_b.len(), 64 * 64);
 }
+
+#[test]
+fn test_high_tile_count_render_exceeds_legacy_ten_bit_tile_limit() {
+    let _guard = match setup_metal_test() {
+        Some(g) => g,
+        None => return,
+    };
+
+    let camera = make_test_camera();
+    let splats = vec![make_center_red_splat()];
+    let mut backend = MetalBackend::new(splats.len()).expect("MetalBackend::new should work");
+    backend
+        .upload_splats(&splats)
+        .expect("upload_splats should succeed");
+
+    backend
+        .render(&camera, 513, 513, splats.len())
+        .expect("high-tile render should exceed the old 1023-tile limit without failing");
+
+    assert_eq!(backend.framebuffer_slice().len(), 513 * 513);
+    assert!(backend.probe_telemetry().num_tiles > 1023);
+}

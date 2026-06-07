@@ -98,13 +98,15 @@ fn run_single_render_attempt_fused(
     let fast_unsorted_enabled = sort_path == MetalSortPath::FastUnsorted;
     let approximate_depth_enabled = sort_path == MetalSortPath::CoarseDepthApprox;
     let approximate_depth_bits = metal_fast_depth_bits();
-    let approximate_radix_offsets = approximate_radix_bit_offsets(approximate_depth_bits);
     let screen_width_u32 = u32::try_from(screen_width)?;
     let screen_height_u32 = u32::try_from(screen_height)?;
     let tile_count_x = div_ceil_u32(screen_width_u32, TILE_SIZE).max(1);
     let tile_count_y = div_ceil_u32(screen_height_u32, TILE_SIZE).max(1);
     let num_tiles_u64 = u64::from(tile_count_x) * u64::from(tile_count_y);
     let num_tiles = usize::try_from(num_tiles_u64)?;
+    let exact_key_mode = if num_tiles > 1024 { 2 } else { 0 };
+    let approximate_radix_offsets =
+        approximate_radix_bit_offsets(num_tiles, approximate_depth_bits);
 
     let attempt_sort_count_u32 = u32::try_from(attempt_sort_count)?;
     backend.ensure_block_sums_capacity_for_count(num_tiles as u32)?;
@@ -282,7 +284,15 @@ fn run_single_render_attempt_fused(
     encoder.set_buffer(6, Some(&backend.tile_config_buffer), 0);
     encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
     set_bytes_u32(encoder, 8, attempt_sort_count_u32);
-    set_bytes_u32(encoder, 9, u32::from(approximate_depth_enabled));
+    set_bytes_u32(
+        encoder,
+        9,
+        if approximate_depth_enabled {
+            1
+        } else {
+            exact_key_mode
+        },
+    );
     set_bytes_u32(encoder, 10, approximate_depth_bits);
     encoder.dispatch_thread_groups_indirect(
         &backend.valid_dispatch_args_buffer,
@@ -414,6 +424,7 @@ fn run_single_render_attempt_two_stage(
     let tile_count_y = div_ceil_u32(screen_height_u32, TILE_SIZE).max(1);
     let num_tiles_u64 = u64::from(tile_count_x) * u64::from(tile_count_y);
     let num_tiles = usize::try_from(num_tiles_u64)?;
+    let exact_key_mode = if num_tiles > 1024 { 2 } else { 0 };
 
     let sort_capacity_u32 = u32::try_from(backend.sort_capacity)?;
     backend.ensure_block_sums_capacity_for_count(num_tiles as u32)?;
@@ -647,7 +658,7 @@ fn run_single_render_attempt_two_stage(
     encoder.set_buffer(6, Some(&backend.tile_config_buffer), 0);
     encoder.set_buffer(7, Some(&backend.overflow_flag_buffer), 0);
     set_bytes_u32(encoder, 8, sort_capacity_u32);
-    set_bytes_u32(encoder, 9, 0);
+    set_bytes_u32(encoder, 9, exact_key_mode);
     set_bytes_u32(encoder, 10, 32);
     dispatch_1d(encoder, valid_count, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
@@ -821,10 +832,18 @@ fn metal_fast_depth_bits() -> u32 {
         .clamp(1, 22)
 }
 
-fn approximate_radix_bit_offsets(depth_bits: u32) -> Vec<u32> {
-    let total_bits = 10u32 + depth_bits.clamp(1, 22);
+fn approximate_radix_bit_offsets(num_tiles: usize, depth_bits: u32) -> Vec<u32> {
+    let tile_bits = required_tile_bits(num_tiles).max(1);
+    let total_bits = tile_bits + depth_bits.clamp(1, 22);
     let pass_count = total_bits.div_ceil(8);
     (0..pass_count).map(|pass| pass * 8).collect()
+}
+
+fn required_tile_bits(num_tiles: usize) -> u32 {
+    if num_tiles <= 1 {
+        return 1;
+    }
+    usize::BITS - (num_tiles - 1).leading_zeros()
 }
 
 fn metal_local_tile_sort_enabled() -> bool {
@@ -926,4 +945,24 @@ fn percentile_nearest_rank(sorted_values: &[u32], percentile: usize) -> u32 {
         .div_ceil(100);
     let index = rank.saturating_sub(1).min(sorted_values.len() - 1);
     sorted_values[index]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{approximate_radix_bit_offsets, required_tile_bits};
+
+    #[test]
+    fn tile_bit_count_scales_past_legacy_ten_bit_grid() {
+        assert_eq!(required_tile_bits(1), 1);
+        assert_eq!(required_tile_bits(1024), 10);
+        assert_eq!(required_tile_bits(1025), 11);
+        assert_eq!(required_tile_bits(3969), 12);
+        assert_eq!(required_tile_bits(65_535), 16);
+    }
+
+    #[test]
+    fn approximate_radix_offsets_include_high_tile_bits() {
+        assert_eq!(approximate_radix_bit_offsets(1024, 14), vec![0, 8, 16]);
+        assert_eq!(approximate_radix_bit_offsets(3969, 14), vec![0, 8, 16, 24]);
+    }
 }
