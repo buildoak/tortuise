@@ -60,7 +60,18 @@ pub fn draw_hud(
     )
     .map_err(|_| io::Error::other("failed to format HUD"))?;
 
-    if app_state.render_mode == RenderMode::Halfblock {
+    let pixel_mode = app_state.render_mode == RenderMode::Halfblock || {
+        #[cfg(feature = "metal")]
+        {
+            app_state.render_mode == RenderMode::Kitty
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            false
+        }
+    };
+
+    if pixel_mode {
         write!(
             hud,
             "{}x [{}x{}]",
@@ -71,6 +82,16 @@ pub fn draw_hud(
         .map_err(|_| io::Error::other("failed to format HUD"))?;
     } else {
         hud.push_str("N/A");
+    }
+
+    #[cfg(feature = "metal")]
+    if app_state.render_mode == RenderMode::Kitty {
+        write!(
+            hud,
+            "  Kitty:{}B/{}B {}ch",
+            app_state.kitty_payload_bytes, app_state.kitty_base64_bytes, app_state.kitty_chunks
+        )
+        .map_err(|_| io::Error::other("failed to format HUD"))?;
     }
 
     write!(hud, "  Cores:{}", rayon::current_num_threads())

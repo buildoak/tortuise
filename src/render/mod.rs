@@ -1,5 +1,7 @@
 pub mod frame;
 mod frame_halfblock;
+#[cfg(feature = "metal")]
+mod frame_kitty;
 pub mod hud;
 #[cfg(feature = "metal")]
 pub mod metal;
@@ -120,6 +122,8 @@ pub struct RenderState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RenderMode {
     Halfblock,
+    #[cfg(feature = "metal")]
+    Kitty,
     PointCloud,
     Matrix,
     BlockDensity,
@@ -130,7 +134,18 @@ pub enum RenderMode {
 impl RenderMode {
     pub fn next(self) -> Self {
         match self {
-            Self::Halfblock => Self::PointCloud,
+            Self::Halfblock => {
+                #[cfg(feature = "metal")]
+                {
+                    Self::Kitty
+                }
+                #[cfg(not(feature = "metal"))]
+                {
+                    Self::PointCloud
+                }
+            }
+            #[cfg(feature = "metal")]
+            Self::Kitty => Self::PointCloud,
             Self::PointCloud => Self::Matrix,
             Self::Matrix => Self::BlockDensity,
             Self::BlockDensity => Self::Braille,
@@ -142,12 +157,58 @@ impl RenderMode {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Halfblock => "Halfblock",
+            #[cfg(feature = "metal")]
+            Self::Kitty => "Kitty",
             Self::PointCloud => "PointCloud",
             Self::Matrix => "Matrix",
             Self::BlockDensity => "BlockDensity",
             Self::Braille => "Braille",
             Self::AsciiClassic => "AsciiClassic",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RenderMode;
+
+    #[test]
+    fn render_mode_cycle_returns_to_halfblock() {
+        let mut mode = RenderMode::Halfblock;
+        let mut names = Vec::new();
+        loop {
+            names.push(mode.name());
+            mode = mode.next();
+            if mode == RenderMode::Halfblock {
+                break;
+            }
+        }
+
+        #[cfg(feature = "metal")]
+        assert_eq!(
+            names,
+            vec![
+                "Halfblock",
+                "Kitty",
+                "PointCloud",
+                "Matrix",
+                "BlockDensity",
+                "Braille",
+                "AsciiClassic"
+            ]
+        );
+        #[cfg(not(feature = "metal"))]
+        assert_eq!(
+            names,
+            vec![
+                "Halfblock",
+                "PointCloud",
+                "Matrix",
+                "BlockDensity",
+                "Braille",
+                "AsciiClassic"
+            ]
+        );
     }
 }
 
@@ -192,6 +253,14 @@ pub struct AppState {
     pub render_mode: RenderMode,
     pub backend: Backend,
     pub use_truecolor: bool,
+    #[cfg(feature = "metal")]
+    pub kitty_image_id: u32,
+    #[cfg(feature = "metal")]
+    pub kitty_payload_bytes: usize,
+    #[cfg(feature = "metal")]
+    pub kitty_base64_bytes: usize,
+    #[cfg(feature = "metal")]
+    pub kitty_chunks: usize,
     #[cfg(feature = "metal")]
     pub metal_backend: Option<crate::render::metal::MetalBackend>,
     #[cfg(feature = "metal")]

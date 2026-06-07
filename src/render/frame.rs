@@ -35,6 +35,10 @@ pub fn render_frame(
                 app_state, term_cols, term_rows, stdout,
             )?;
         }
+        #[cfg(feature = "metal")]
+        RenderMode::Kitty => {
+            super::frame_kitty::render_kitty_frame(app_state, term_cols, term_rows, stdout)?;
+        }
         RenderMode::PointCloud
         | RenderMode::Matrix
         | RenderMode::BlockDensity

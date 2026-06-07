@@ -122,6 +122,9 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(long, help = "Force Metal GPU rendering", conflicts_with = "cpu")]
     metal: bool,
+    #[cfg(feature = "metal")]
+    #[arg(long, help = "Start in Kitty graphics protocol render mode")]
+    kitty: bool,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -449,9 +452,30 @@ fn main() -> AppResult<()> {
         orbit_height: 0.0,
         orbit_target: Vec3::ZERO,
         supersample_factor: cli.supersample.max(1),
-        render_mode: RenderMode::Halfblock,
+        render_mode: {
+            #[cfg(feature = "metal")]
+            {
+                if cli.kitty {
+                    RenderMode::Kitty
+                } else {
+                    RenderMode::Halfblock
+                }
+            }
+            #[cfg(not(feature = "metal"))]
+            {
+                RenderMode::Halfblock
+            }
+        },
         backend,
         use_truecolor,
+        #[cfg(feature = "metal")]
+        kitty_image_id: 1,
+        #[cfg(feature = "metal")]
+        kitty_payload_bytes: 0,
+        #[cfg(feature = "metal")]
+        kitty_base64_bytes: 0,
+        #[cfg(feature = "metal")]
+        kitty_chunks: 0,
         #[cfg(feature = "metal")]
         metal_backend: metal_backend.take(),
         #[cfg(feature = "metal")]

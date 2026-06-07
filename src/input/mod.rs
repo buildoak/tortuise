@@ -207,6 +207,14 @@ mod tests {
             backend: Backend::Cpu,
             use_truecolor: false,
             #[cfg(feature = "metal")]
+            kitty_image_id: 1,
+            #[cfg(feature = "metal")]
+            kitty_payload_bytes: 0,
+            #[cfg(feature = "metal")]
+            kitty_base64_bytes: 0,
+            #[cfg(feature = "metal")]
+            kitty_chunks: 0,
+            #[cfg(feature = "metal")]
             metal_backend: None,
             #[cfg(feature = "metal")]
             last_gpu_error: None,

@@ -1,8 +1,35 @@
-# Kitty Protocol Prep
+# Kitty Protocol Support
 
-This repo is not wired to live Kitty graphics protocol output yet, but the
-rendering side now has the probe artifacts needed to measure that path before
-integrating terminal escape transport.
+This repo now has a live, Metal-backed Kitty graphics protocol mode plus the
+probe artifacts needed to measure terminal payload cost separately from renderer
+cost.
+
+## Live Mode
+
+Run a scene in Kitty graphics protocol mode:
+
+```bash
+cargo run --features metal --release -- "$SCENE" --kitty
+```
+
+The normal `M` render-mode cycle includes:
+
+```text
+Halfblock -> Kitty -> PointCloud -> Matrix -> BlockDensity -> Braille -> AsciiClassic
+```
+
+Runtime behavior:
+
+- Kitty mode is available only with the `metal` feature.
+- The renderer uses the Metal packed framebuffer as the source of truth.
+- Each frame is converted to RGBA8, base64 encoded, and emitted as Kitty direct
+  image data chunks.
+- HUD telemetry reports raw RGBA bytes, base64 bytes, and chunk count as
+  `Kitty:<payload>B/<base64>B <chunks>ch`.
+- If Metal is unavailable or fails, the app falls back to halfblock rendering.
+
+The current live path sends a full RGBA frame. Dirty-frame updates, placement
+reuse, and transport timing breakdowns are still separate optimization gates.
 
 ## Probe Payload Gate
 
@@ -66,14 +93,12 @@ Result:
 - 4096-byte chunks: `4`
 - CPU-vs-Metal mismatches: `0`
 
-## Live Integration Plan
+## Remaining Integration Gates
 
-1. Add a terminal transport module that can write Kitty graphics protocol image
-   frames from RGBA bytes.
-2. Add byte-budget telemetry beside render timing: render ms, readback ms,
+1. Add byte-budget telemetry beside render timing: render ms, readback ms,
    encode/base64 ms, write bytes, terminal flush ms.
-3. Add dirty-frame policy so static frames do not resend full payloads.
-4. Keep halfblock as fallback; select Kitty only when terminal capability is
-   detected or explicitly requested.
-5. Benchmark live transport separately from renderer speed. A fast Metal frame
+2. Add dirty-frame policy so static frames do not resend full payloads.
+3. Detect terminal capability for auto-selection; keep `--kitty` as the explicit
+   override.
+4. Benchmark live transport separately from renderer speed. A fast Metal frame
    can still be bottlenecked by base64 and terminal I/O.

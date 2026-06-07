@@ -20,6 +20,7 @@ metal = ["dep:metal", "dep:objc"]
 [dependencies]
 crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
 png = "0.18.1"
 rand = "0.9"
 rayon = "1.10"
