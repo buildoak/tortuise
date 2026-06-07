@@ -42,6 +42,8 @@ Runtime behavior:
 
 - Kitty mode is available only with the `metal` feature.
 - The renderer uses the Metal packed framebuffer as the source of truth.
+- When HUD is visible, Kitty mode reserves the top and bottom terminal rows for
+  normal text and places the image between them.
 - Each frame is converted to RGBA8, base64 encoded, and emitted as Kitty direct
   image data chunks.
 - HUD telemetry reports raw RGBA bytes, base64 bytes, and chunk count as

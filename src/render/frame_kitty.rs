@@ -412,6 +412,13 @@ fn record_kitty_gpu_error(app_state: &mut AppState, err: &crate::render::metal::
     }
 }
 
+fn kitty_image_placement_rows(show_hud: bool, term_rows: usize) -> (usize, usize) {
+    let reserved_hud_rows = if show_hud && term_rows > 2 { 2 } else { 0 };
+    let image_term_rows = term_rows.saturating_sub(reserved_hud_rows).max(1);
+    let image_start_row = if reserved_hud_rows > 0 { 1 } else { 0 };
+    (image_start_row, image_term_rows)
+}
+
 #[cfg(feature = "metal")]
 pub fn render_kitty_frame(
     app_state: &mut AppState,
@@ -427,8 +434,10 @@ pub fn render_kitty_frame(
 
     let ss = app_state.supersample_factor as usize;
     let scale_divisor = kitty_scale_divisor_from_env();
+    let (image_start_row, image_term_rows) =
+        kitty_image_placement_rows(app_state.show_hud, term_rows);
     let width = term_cols.saturating_mul(ss).div_ceil(scale_divisor).max(1);
-    let height = term_rows
+    let height = image_term_rows
         .saturating_mul(2)
         .saturating_mul(ss)
         .div_ceil(scale_divisor)
@@ -459,14 +468,14 @@ pub fn render_kitty_frame(
         }
     }
 
-    queue!(stdout, cursor::MoveTo(0, 0))?;
+    queue!(stdout, cursor::MoveTo(0, image_start_row as u16))?;
     let (base64_bytes, chunks) = write_kitty_rgba_direct(
         stdout,
         app_state.kitty_image_id,
         width,
         height,
         term_cols,
-        term_rows,
+        image_term_rows,
         format,
         &payload,
     )?;
@@ -534,6 +543,14 @@ mod tests {
         assert_eq!(measurements[1].payload_bytes, 6);
         assert_eq!(measurements[1].base64_bytes, 8);
         assert_eq!(measurements[1].chunks, 1);
+    }
+
+    #[test]
+    fn kitty_image_placement_reserves_hud_rows_when_possible() {
+        assert_eq!(kitty_image_placement_rows(true, 40), (1, 38));
+        assert_eq!(kitty_image_placement_rows(false, 40), (0, 40));
+        assert_eq!(kitty_image_placement_rows(true, 2), (0, 2));
+        assert_eq!(kitty_image_placement_rows(true, 0), (0, 1));
     }
 
     #[test]
