@@ -112,6 +112,8 @@ struct Cli {
     probe_case: String,
     #[arg(long, help = "Also emit terminal-cell probe artifacts when supported")]
     probe_terminal: bool,
+    #[arg(long, help = "Also emit Kitty-ready raw RGBA probe payload artifacts")]
+    probe_kitty_payload: bool,
     #[arg(long, help = "Exit nonzero when CPU/Metal probe comparison mismatches")]
     probe_fail_on_mismatch: bool,
     #[cfg(feature = "metal")]
@@ -308,6 +310,7 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     config.frames = cli.probe_benchmark_frames.unwrap_or(cli.probe_frames);
     config.warmup_frames = cli.probe_warmup;
     config.terminal_artifacts = cli.probe_terminal;
+    config.kitty_artifacts = cli.probe_kitty_payload;
     config.inspect_scale = cli.probe_inspect_scale;
     config.stage_telemetry = cli.probe_stage_telemetry;
     config.timing = cli.probe_timing || cli.probe_benchmark_frames.is_some();

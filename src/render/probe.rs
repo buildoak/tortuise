@@ -236,6 +236,7 @@ pub struct ProbeConfig {
     pub frames: usize,
     pub warmup_frames: usize,
     pub terminal_artifacts: bool,
+    pub kitty_artifacts: bool,
     pub stage_telemetry: bool,
     pub timing: bool,
 }
@@ -253,6 +254,7 @@ impl ProbeConfig {
             frames: 1,
             warmup_frames: 0,
             terminal_artifacts: false,
+            kitty_artifacts: false,
             stage_telemetry: false,
             timing: false,
         }
@@ -288,6 +290,8 @@ pub struct ProbeFrameArtifact {
     pub frame_path: PathBuf,
     pub inspect_png_path: PathBuf,
     pub stats_path: PathBuf,
+    pub kitty_rgba_path: Option<PathBuf>,
+    pub kitty_metadata_path: Option<PathBuf>,
     pub stage_telemetry_path: Option<PathBuf>,
     pub stats: ProbeFrameStats,
 }
@@ -298,6 +302,8 @@ pub struct ProbeMetalFrameArtifact {
     pub inspect_png_path: PathBuf,
     pub stats_path: PathBuf,
     pub packed_u32le_path: PathBuf,
+    pub kitty_rgba_path: Option<PathBuf>,
+    pub kitty_metadata_path: Option<PathBuf>,
     pub stage_telemetry_path: Option<PathBuf>,
     pub stats: ProbeFrameStats,
     pub telemetry: Option<ProbeMetalStageTelemetry>,
@@ -669,6 +675,10 @@ fn render_cpu_probe_frames(
     if config.terminal_artifacts {
         fs::create_dir_all(&terminal_dir)?;
     }
+    let kitty_dir = config.out_dir.join("kitty");
+    if config.kitty_artifacts {
+        fs::create_dir_all(&kitty_dir)?;
+    }
 
     let mut timing = ProbeBackendTiming {
         frames: config.frames,
@@ -702,6 +712,14 @@ fn render_cpu_probe_frames(
             config.inspect_scale
         ));
         let stats_path = cpu_dir.join(format!("frame_{frame_idx:03}.json"));
+        let (kitty_rgba_path, kitty_metadata_path) = if config.kitty_artifacts {
+            (
+                Some(kitty_dir.join(format!("cpu_frame_{frame_idx:03}.rgba"))),
+                Some(kitty_dir.join(format!("cpu_frame_{frame_idx:03}.json"))),
+            )
+        } else {
+            (None, None)
+        };
         let stage_telemetry_path = if config.stage_telemetry {
             Some(cpu_dir.join(format!("stage_telemetry_frame_{frame_idx:03}.json")))
         } else {
@@ -734,12 +752,23 @@ fn render_cpu_probe_frames(
                 &frame,
             )?;
         }
+        if let (Some(rgba_path), Some(metadata_path)) = (&kitty_rgba_path, &kitty_metadata_path) {
+            let payload_bytes = write_kitty_rgba_from_rgb(rgba_path, &frame)?;
+            write_kitty_payload_metadata(
+                metadata_path,
+                config.width,
+                config.height,
+                payload_bytes,
+            )?;
+        }
         timing.artifact_write_ms += duration_ms(artifact_started.elapsed());
 
         artifacts.push(ProbeFrameArtifact {
             frame_path,
             inspect_png_path,
             stats_path,
+            kitty_rgba_path,
+            kitty_metadata_path,
             stage_telemetry_path,
             stats,
         });
@@ -769,6 +798,10 @@ fn render_metal_probe_frames(
     let terminal_dir = config.out_dir.join("terminal");
     if config.terminal_artifacts {
         fs::create_dir_all(&terminal_dir)?;
+    }
+    let kitty_dir = config.out_dir.join("kitty");
+    if config.kitty_artifacts {
+        fs::create_dir_all(&kitty_dir)?;
     }
 
     let mut backend = super::metal::MetalBackend::new(splats.len())?;
@@ -810,6 +843,14 @@ fn render_metal_probe_frames(
         ));
         let stats_path = metal_dir.join(format!("frame_{frame_idx:03}.json"));
         let packed_u32le_path = metal_dir.join(format!("frame_{frame_idx:03}.packed_u32le.bin"));
+        let (kitty_rgba_path, kitty_metadata_path) = if config.kitty_artifacts {
+            (
+                Some(kitty_dir.join(format!("metal_frame_{frame_idx:03}.rgba"))),
+                Some(kitty_dir.join(format!("metal_frame_{frame_idx:03}.json"))),
+            )
+        } else {
+            (None, None)
+        };
         let stage_telemetry_path = if config.stage_telemetry {
             Some(metal_dir.join(format!("stage_telemetry_frame_{frame_idx:03}.json")))
         } else {
@@ -837,6 +878,15 @@ fn render_metal_probe_frames(
                 &frame,
             )?;
         }
+        if let (Some(rgba_path), Some(metadata_path)) = (&kitty_rgba_path, &kitty_metadata_path) {
+            let payload_bytes = write_kitty_rgba_from_packed(rgba_path, packed)?;
+            write_kitty_payload_metadata(
+                metadata_path,
+                config.width,
+                config.height,
+                payload_bytes,
+            )?;
+        }
         timing.artifact_write_ms += duration_ms(artifact_started.elapsed());
 
         artifacts.push(ProbeMetalFrameArtifact {
@@ -844,6 +894,8 @@ fn render_metal_probe_frames(
             inspect_png_path,
             stats_path,
             packed_u32le_path,
+            kitty_rgba_path,
+            kitty_metadata_path,
             stage_telemetry_path,
             stats,
             telemetry,
@@ -1474,6 +1526,68 @@ fn write_packed_u32le(path: &Path, packed: &[u32]) -> io::Result<()> {
     Ok(())
 }
 
+fn kitty_base64_bytes(payload_bytes: usize) -> usize {
+    payload_bytes.div_ceil(3) * 4
+}
+
+fn kitty_chunk_count(base64_bytes: usize, chunk_size: usize) -> usize {
+    if base64_bytes == 0 {
+        0
+    } else {
+        base64_bytes.div_ceil(chunk_size.max(1))
+    }
+}
+
+fn write_kitty_payload_metadata(
+    path: &Path,
+    width: usize,
+    height: usize,
+    payload_bytes: usize,
+) -> io::Result<()> {
+    let base64_bytes = kitty_base64_bytes(payload_bytes);
+    let chunks_4096 = kitty_chunk_count(base64_bytes, 4096);
+    fs::write(
+        path,
+        format!(
+            concat!(
+                "{{",
+                "\"format\":\"rgba8\",",
+                "\"width\":{},",
+                "\"height\":{},",
+                "\"payload_bytes\":{},",
+                "\"base64_bytes\":{},",
+                "\"chunks_4096\":{}",
+                "}}\n"
+            ),
+            width, height, payload_bytes, base64_bytes, chunks_4096
+        ),
+    )
+}
+
+fn write_kitty_rgba_from_rgb(path: &Path, frame: &[[u8; 3]]) -> io::Result<usize> {
+    let mut file = fs::File::create(path)?;
+    let mut bytes_written = 0usize;
+    for pixel in frame {
+        file.write_all(&[pixel[0], pixel[1], pixel[2], 255])?;
+        bytes_written += 4;
+    }
+    Ok(bytes_written)
+}
+
+fn write_kitty_rgba_from_packed(path: &Path, packed: &[u32]) -> io::Result<usize> {
+    let mut file = fs::File::create(path)?;
+    let mut bytes_written = 0usize;
+    for pixel in packed {
+        let r = (pixel & 0xFF) as u8;
+        let g = ((pixel >> 8) & 0xFF) as u8;
+        let b = ((pixel >> 16) & 0xFF) as u8;
+        let a = ((pixel >> 24) & 0xFF) as u8;
+        file.write_all(&[r, g, b, a])?;
+        bytes_written += 4;
+    }
+    Ok(bytes_written)
+}
+
 fn write_diff_artifacts(
     diff_dir: &Path,
     inspect_diff_dir: &Path,
@@ -1551,6 +1665,8 @@ fn write_manifest_json(
                     "\"frame\":\"{}\",",
                     "\"inspect_png\":\"{}\",",
                     "\"stats\":\"{}\",",
+                    "\"kitty_rgba\":{},",
+                    "\"kitty_metadata\":{},",
                     "\"stage_telemetry\":{},",
                     "\"metrics\":{}",
                     "}}"
@@ -1559,6 +1675,8 @@ fn write_manifest_json(
                 json_escape(&display_path(&frame.frame_path)),
                 json_escape(&display_path(&frame.inspect_png_path)),
                 json_escape(&display_path(&frame.stats_path)),
+                optional_path_json(frame.kitty_rgba_path.as_deref()),
+                optional_path_json(frame.kitty_metadata_path.as_deref()),
                 optional_path_json(frame.stage_telemetry_path.as_deref()),
                 frame_stats_json(&frame.stats)
             )
@@ -1577,6 +1695,8 @@ fn write_manifest_json(
                     "\"inspect_png\":\"{}\",",
                     "\"stats\":\"{}\",",
                     "\"packed_u32le\":\"{}\",",
+                    "\"kitty_rgba\":{},",
+                    "\"kitty_metadata\":{},",
                     "\"stage_telemetry\":{},",
                     "\"telemetry\":{},",
                     "\"metrics\":{}",
@@ -1587,6 +1707,8 @@ fn write_manifest_json(
                 json_escape(&display_path(&frame.inspect_png_path)),
                 json_escape(&display_path(&frame.stats_path)),
                 json_escape(&display_path(&frame.packed_u32le_path)),
+                optional_path_json(frame.kitty_rgba_path.as_deref()),
+                optional_path_json(frame.kitty_metadata_path.as_deref()),
                 optional_path_json(frame.stage_telemetry_path.as_deref()),
                 frame
                     .telemetry
@@ -1641,6 +1763,7 @@ fn write_manifest_json(
             "  \"frames\": {},\n",
             "  \"warmup_frames\": {},\n",
             "  \"terminal_artifacts\": {},\n",
+            "  \"kitty_artifacts\": {},\n",
             "  \"stage_telemetry\": {},\n",
             "  \"timing_enabled\": {},\n",
             "  \"artifacts\": {{\n",
@@ -1665,6 +1788,7 @@ fn write_manifest_json(
         config.frames,
         config.warmup_frames,
         config.terminal_artifacts,
+        config.kitty_artifacts,
         config.stage_telemetry,
         config.timing,
         json_escape(&display_path(contact_sheet_path)),
@@ -2673,6 +2797,51 @@ mod tests {
 
         let bytes = fs::read(path).unwrap();
         assert_eq!(bytes, vec![0x44, 0x33, 0x22, 0x11, 0xdd, 0xcc, 0xbb, 0xaa]);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn probe_writes_kitty_rgba_from_rgb() {
+        let dir = unique_temp_dir("probe_kitty_rgb_writer");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frame.rgba");
+
+        let bytes_written = write_kitty_rgba_from_rgb(&path, &[[1, 2, 3], [4, 5, 6]]).unwrap();
+
+        assert_eq!(bytes_written, 8);
+        assert_eq!(fs::read(path).unwrap(), vec![1, 2, 3, 255, 4, 5, 6, 255]);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn probe_writes_kitty_rgba_from_packed() {
+        let dir = unique_temp_dir("probe_kitty_packed_writer");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frame.rgba");
+
+        let bytes_written = write_kitty_rgba_from_packed(&path, &[0x44332211]).unwrap();
+
+        assert_eq!(bytes_written, 4);
+        assert_eq!(fs::read(path).unwrap(), vec![0x11, 0x22, 0x33, 0x44]);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn probe_writes_kitty_payload_metadata() {
+        let dir = unique_temp_dir("probe_kitty_metadata");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frame.json");
+
+        write_kitty_payload_metadata(&path, 2, 1, 8).unwrap();
+
+        let json = fs::read_to_string(path).unwrap();
+        assert!(json.contains("\"format\":\"rgba8\""));
+        assert!(json.contains("\"payload_bytes\":8"));
+        assert!(json.contains("\"base64_bytes\":12"));
+        assert!(json.contains("\"chunks_4096\":1"));
 
         let _ = fs::remove_dir_all(dir);
     }

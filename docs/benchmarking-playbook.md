@@ -28,6 +28,8 @@ Each probe case should preserve:
 - `diff/summary.json` and `inspect/diff/cpu_vs_metal_frame_000.xN.png` for
   CPU-vs-Metal runs
 - `terminal/*_frame_000.ansi.txt` when `--probe-terminal` is used
+- `kitty/*_frame_000.rgba` and `kitty/*_frame_000.json` when
+  `--probe-kitty-payload` is used
 
 `probe_manifest.json` is not enough provenance by itself. Keep the exact
 command line in `commands.txt` or in the benchmark notes.
@@ -260,6 +262,8 @@ Rubric:
   sort paths, or machines.
 - Do not treat `probe_timing.json` as sufficient provenance; keep exact
   commands.
+- Do not make Kitty throughput claims without `--probe-kitty-payload`; report
+  RGBA bytes, base64 bytes, and chunk count.
 
 ## Checklist
 
