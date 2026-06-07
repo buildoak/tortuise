@@ -273,6 +273,36 @@ fn read_shared_buffer_slice<T: Copy>(buffer: &metal::Buffer, count: usize) -> Ve
 }
 
 #[test]
+fn test_warmed_overlap_estimate_does_not_floor_large_sparse_scene_to_splat_count() {
+    let estimate = super::render::estimate_overlaps_for_attempt(2_315_943, 59_901, 192, 192);
+    assert_eq!(estimate, 74_877);
+}
+
+#[test]
+fn test_warmed_overlap_estimate_scales_with_tile_count() {
+    let estimate = super::render::estimate_overlaps_for_attempt(2_315_943, 59_901, 96, 192);
+    assert_eq!(estimate, 149_753);
+}
+
+#[test]
+fn test_warmed_overlap_estimate_keeps_small_scene_floor() {
+    let estimate = super::render::estimate_overlaps_for_attempt(64, 20, 16, 16);
+    assert_eq!(estimate, 1024);
+}
+
+#[test]
+fn test_cold_overlap_estimate_stays_conservative() {
+    assert_eq!(
+        super::render::estimate_overlaps_for_attempt(2_315_943, 0, 0, 192),
+        18_527_544
+    );
+    assert_eq!(
+        super::render::estimate_overlaps_for_attempt(64, 0, 0, 16),
+        1024
+    );
+}
+
+#[test]
 fn test_struct_sizes() {
     assert_eq!(std::mem::size_of::<types::GpuSplatData>(), 48);
     assert_eq!(std::mem::size_of::<types::GpuCameraData>(), 72);
