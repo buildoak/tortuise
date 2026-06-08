@@ -208,8 +208,8 @@ struct Cli {
     #[arg(
         long,
         value_name = "floor-even|voxel",
-        default_value = "voxel",
-        help = "Stable source ordering used by --metal-lod fixed"
+        default_value = "floor-even",
+        help = "Stable source ordering used by --metal-lod fixed; voxel is experimental"
     )]
     metal_lod_order: String,
     #[arg(long, help = "Flip Y axis")]
