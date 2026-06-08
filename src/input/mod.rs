@@ -117,7 +117,10 @@ pub fn handle_input_event(app_state: &mut AppState, event: Event) -> AppResult<(
 
             match key_event.code {
                 KeyCode::Esc => app_state.input_state.quit_requested = true,
-                KeyCode::Tab => app_state.show_hud = !app_state.show_hud,
+                KeyCode::Tab => {
+                    app_state.hud_mode = app_state.hud_mode.next();
+                    app_state.show_hud = app_state.hud_mode.is_visible();
+                }
                 KeyCode::Char('+') | KeyCode::Char('=') => {
                     app_state.move_speed = (app_state.move_speed * 1.2).min(10.0);
                 }
@@ -214,8 +217,10 @@ mod tests {
             },
             halfblock_cells: Vec::new(),
             hud_string_buf: String::new(),
+            scene_label: "test".to_string(),
             input_state: crate::input::state::InputState::default(),
             show_hud: true,
+            hud_mode: crate::render::HudMode::Minimal,
             camera_mode: CameraMode::Free,
             move_speed: 0.3,
             frame_count: 0,

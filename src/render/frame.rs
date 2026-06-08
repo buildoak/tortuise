@@ -257,7 +257,17 @@ pub fn render_frame(
         }
     }
 
-    if app_state.show_hud {
+    let terminal_hud = app_state.show_hud && {
+        #[cfg(feature = "metal")]
+        {
+            app_state.render_mode != RenderMode::Kitty
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            true
+        }
+    };
+    if terminal_hud {
         super::hud::draw_hud(app_state, cols, rows, ss, stdout)?;
     }
 

@@ -68,7 +68,7 @@ pub fn draw_hud(
     );
     write!(
         hud,
-        "FPS:{:>5.1}  Splats:{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Render:{}  SS:",
+        "FPS:{:>5.1}  Splats:{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Render:{}  ",
         app_state.fps,
         splat_label,
         app_state.camera.position.x,
@@ -95,14 +95,14 @@ pub fn draw_hud(
     if pixel_mode {
         write!(
             hud,
-            "{}x [{}x{}]",
+            "Canvas:{}x{} Detail:{}x",
+            app_state.last_render_width.max(term_cols * ss),
+            app_state.last_render_height.max(term_rows * 2 * ss),
             app_state.supersample_factor,
-            term_cols * ss,
-            term_rows * 2 * ss
         )
         .map_err(|_| io::Error::other("failed to format HUD"))?;
     } else {
-        hud.push_str("N/A");
+        hud.push_str("Canvas:N/A");
     }
 
     #[cfg(feature = "metal")]

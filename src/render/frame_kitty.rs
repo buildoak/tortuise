@@ -6,7 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use crossterm::{cursor, queue};
 
 #[cfg(feature = "metal")]
-use super::{AppState, Backend, MetalLodMode};
+use super::{AppState, Backend, HudMode, MetalLodMode};
 
 pub const KITTY_DIRECT_CHUNK_SIZE: usize = 4096;
 
@@ -114,6 +114,284 @@ fn packed_framebuffer_to_rgb(packed: &[u32], out: &mut Vec<u8>) {
         out.push(((pixel >> 8) & 0xFF) as u8);
         out.push(((pixel >> 16) & 0xFF) as u8);
     }
+}
+
+#[cfg(feature = "metal")]
+fn glyph_rows(ch: char) -> [u8; 7] {
+    match ch.to_ascii_uppercase() {
+        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+        'C' => [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
+        'D' => [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e],
+        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+        'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+        'G' => [0x0e, 0x11, 0x10, 0x13, 0x11, 0x11, 0x0e],
+        'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        'I' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f],
+        'J' => [0x1f, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a],
+        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        '2' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
+        '3' => [0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e],
+        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+        '5' => [0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e],
+        '6' => [0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e],
+        ':' => [0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
+        ',' => [0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08],
+        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+        '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+        '|' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        '+' => [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00],
+        '%' => [0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03],
+        ' ' => [0; 7],
+        _ => [0x1f, 0x01, 0x02, 0x04, 0x04, 0x00, 0x04],
+    }
+}
+
+#[cfg(feature = "metal")]
+fn put_payload_pixel(
+    payload: &mut [u8],
+    width: usize,
+    height: usize,
+    format: KittyPayloadFormat,
+    x: usize,
+    y: usize,
+    color: [u8; 4],
+) {
+    if x >= width || y >= height {
+        return;
+    }
+    let bpp = format.bytes_per_pixel();
+    let idx = (y * width + x) * bpp;
+    if idx + bpp > payload.len() {
+        return;
+    }
+    payload[idx] = color[0];
+    payload[idx + 1] = color[1];
+    payload[idx + 2] = color[2];
+    if bpp == 4 {
+        payload[idx + 3] = color[3];
+    }
+}
+
+#[cfg(feature = "metal")]
+fn fill_payload_rect(
+    payload: &mut [u8],
+    dims: (usize, usize),
+    format: KittyPayloadFormat,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: [u8; 4],
+) {
+    let (width, height) = dims;
+    for py in y..y.saturating_add(h).min(height) {
+        for px in x..x.saturating_add(w).min(width) {
+            put_payload_pixel(payload, width, height, format, px, py, color);
+        }
+    }
+}
+
+#[cfg(feature = "metal")]
+fn draw_payload_text(
+    payload: &mut [u8],
+    dims: (usize, usize),
+    format: KittyPayloadFormat,
+    x: usize,
+    y: usize,
+    scale: usize,
+    text: &str,
+    color: [u8; 4],
+) {
+    let (width, height) = dims;
+    let mut cursor_x = x;
+    let glyph_w = 5 * scale;
+    let advance = 6 * scale;
+    for ch in text.chars() {
+        if cursor_x >= width {
+            break;
+        }
+        let rows = glyph_rows(ch);
+        for (row_idx, bits) in rows.iter().enumerate() {
+            for col in 0..5 {
+                if bits & (1 << (4 - col)) == 0 {
+                    continue;
+                }
+                let px = cursor_x + col * scale;
+                let py = y + row_idx * scale;
+                fill_payload_rect(
+                    payload,
+                    (width, height),
+                    format,
+                    px,
+                    py,
+                    scale,
+                    scale,
+                    color,
+                );
+            }
+        }
+        cursor_x = cursor_x.saturating_add(if ch == ' ' { glyph_w } else { advance });
+    }
+}
+
+#[cfg(feature = "metal")]
+fn quality_label() -> &'static str {
+    match std::env::var("TORTUISE_METAL_QUALITY") {
+        Ok(value) => match value.trim() {
+            "fast-preview" => "fast-preview",
+            "turbo" => "turbo",
+            _ => "exact",
+        },
+        Err(_) => "exact",
+    }
+}
+
+#[cfg(feature = "metal")]
+fn env_or<'a>(key: &str, fallback: &'a str) -> String {
+    std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+}
+
+#[cfg(feature = "metal")]
+fn splat_label(app_state: &AppState) -> String {
+    match app_state.metal_lod_mode {
+        super::MetalLodMode::Off => format!("{}", app_state.splats.len()),
+        super::MetalLodMode::Fixed => {
+            format!(
+                "{}/{}",
+                app_state.metal_active_splat_count,
+                app_state.splats.len()
+            )
+        }
+    }
+}
+
+#[cfg(feature = "metal")]
+fn gpu_wait_ms(app_state: &AppState) -> f64 {
+    app_state
+        .metal_backend
+        .as_ref()
+        .map(|mb| {
+            let telemetry = mb.probe_telemetry();
+            telemetry.stage_timings[..telemetry.stage_timing_count]
+                .iter()
+                .map(|stage| stage.wait_ms)
+                .sum()
+        })
+        .unwrap_or(0.0)
+}
+
+#[cfg(feature = "metal")]
+fn draw_kitty_bitmap_hud(
+    app_state: &AppState,
+    payload: &mut [u8],
+    width: usize,
+    height: usize,
+    format: KittyPayloadFormat,
+    scale_divisor: usize,
+) {
+    if app_state.hud_mode == HudMode::Hidden || width < 80 || height < 24 {
+        return;
+    }
+
+    let scale = if height >= 180 && width >= 320 { 2 } else { 1 };
+    let line_h = 7 * scale;
+    let pad = 3 * scale;
+    let bar_h = match app_state.hud_mode {
+        HudMode::Debug => line_h * 2 + pad * 3,
+        HudMode::Minimal => line_h + pad * 2,
+        HudMode::Hidden => return,
+    };
+    let bottom_h = line_h + pad * 2;
+    let bg = [0, 0, 0, 235];
+    let fg = [238, 242, 246, 255];
+    let dim = [182, 190, 198, 255];
+    let warn = [255, 210, 72, 255];
+
+    fill_payload_rect(payload, (width, height), format, 0, 0, width, bar_h, bg);
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        0,
+        height.saturating_sub(bottom_h),
+        width,
+        bottom_h,
+        bg,
+    );
+
+    let top = format!(
+        "FPS {:.1} | {}X{} | KITTY | {} | {}",
+        app_state.fps,
+        width,
+        height,
+        app_state.scene_label,
+        app_state.camera_mode.name()
+    );
+    draw_payload_text(payload, (width, height), format, pad, pad, scale, &top, fg);
+
+    if app_state.hud_mode == HudMode::Debug {
+        let debug = format!(
+            "SPLATS {} | GPU {:.1}MS | KITTY C{:.1} E{:.1} W{:.1} F{:.1}MS | {} | A{} T{} | SCALE {}",
+            splat_label(app_state),
+            gpu_wait_ms(app_state),
+            app_state.kitty_convert_ms,
+            app_state.kitty_encode_ms,
+            app_state.kitty_write_ms,
+            app_state.last_flush_ms,
+            quality_label(),
+            env_or("TORTUISE_METAL_FAST_ALPHA_CUTOFF", "-"),
+            env_or("TORTUISE_METAL_FAST_TILE_BUDGET", "-"),
+            scale_divisor
+        );
+        draw_payload_text(
+            payload,
+            (width, height),
+            format,
+            pad,
+            pad * 2 + line_h,
+            scale,
+            &debug,
+            warn,
+        );
+    }
+
+    let controls = match app_state.camera_mode {
+        super::CameraMode::Free => "ARROWS | WASD | SPACE ORBIT | TAB | Q",
+        super::CameraMode::Orbit => "ARROWS ORBIT | SPACE FREE | TAB | Z | Q",
+    };
+    draw_payload_text(
+        payload,
+        (width, height),
+        format,
+        pad,
+        height.saturating_sub(bottom_h).saturating_add(pad),
+        scale,
+        controls,
+        dim,
+    );
 }
 
 fn validate_rgba_dimensions(width: usize, height: usize, rgba: &[u8]) -> io::Result<usize> {
@@ -470,10 +748,8 @@ fn clear_kitty_transport_stats(app_state: &mut AppState) {
 
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn kitty_image_placement_rows(show_hud: bool, term_rows: usize) -> (usize, usize) {
-    let reserved_hud_rows = if show_hud && term_rows > 2 { 2 } else { 0 };
-    let image_term_rows = term_rows.saturating_sub(reserved_hud_rows).max(1);
-    let image_start_row = if reserved_hud_rows > 0 { 1 } else { 0 };
-    (image_start_row, image_term_rows)
+    let _ = show_hud;
+    (0, term_rows.max(1))
 }
 
 #[cfg(feature = "metal")]
@@ -516,6 +792,11 @@ pub fn render_kitty_frame(
             app_state, term_cols, term_rows, stdout,
         );
     }
+    if let Some(mb) = app_state.metal_backend.as_ref() {
+        let telemetry = mb.probe_telemetry();
+        app_state.visible_splat_count = telemetry.valid_count as usize;
+    }
+    app_state.effective_render_path = "metal_kitty";
 
     let format = kitty_payload_format_from_env();
     let mut payload = Vec::with_capacity(
@@ -535,6 +816,14 @@ pub fn render_kitty_frame(
         }
     }
     app_state.kitty_convert_ms = convert_start.elapsed().as_secs_f32() * 1000.0;
+    draw_kitty_bitmap_hud(
+        app_state,
+        &mut payload,
+        width,
+        height,
+        format,
+        scale_divisor,
+    );
 
     let encode_start = Instant::now();
     let encoded = BASE64_STANDARD.encode(&payload);
@@ -563,11 +852,6 @@ pub fn render_kitty_frame(
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
     app_state.kitty_write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
-    if let Some(mb) = app_state.metal_backend.as_ref() {
-        let telemetry = mb.probe_telemetry();
-        app_state.visible_splat_count = telemetry.valid_count as usize;
-    }
-    app_state.effective_render_path = "metal_kitty";
     Ok(())
 }
 
@@ -615,6 +899,23 @@ mod tests {
         assert_eq!(out, vec![0x11, 0x22, 0x33]);
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn bitmap_text_draws_into_rgb_payload() {
+        let mut payload = vec![0u8; 32 * 16 * 3];
+        draw_payload_text(
+            &mut payload,
+            (32, 16),
+            KittyPayloadFormat::Rgb24,
+            1,
+            1,
+            1,
+            "FPS",
+            [255, 128, 64, 255],
+        );
+        assert!(payload.chunks_exact(3).any(|px| px == [255, 128, 64]));
+    }
+
     #[test]
     fn kitty_delete_image_uses_id_specific_quiet_delete() {
         let mut out = Vec::new();
@@ -650,8 +951,8 @@ mod tests {
     }
 
     #[test]
-    fn kitty_image_placement_reserves_hud_rows_when_possible() {
-        assert_eq!(kitty_image_placement_rows(true, 40), (1, 38));
+    fn kitty_image_placement_uses_full_terminal_for_bitmap_hud() {
+        assert_eq!(kitty_image_placement_rows(true, 40), (0, 40));
         assert_eq!(kitty_image_placement_rows(false, 40), (0, 40));
         assert_eq!(kitty_image_placement_rows(true, 2), (0, 2));
         assert_eq!(kitty_image_placement_rows(true, 0), (0, 1));

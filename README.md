@@ -97,7 +97,7 @@ Options:
 | `Space` | Switch to Orbit mode |
 | `M` | Cycle render mode |
 | `+` / `-` | Adjust movement speed |
-| `Tab` | Toggle HUD |
+| `Tab` | Cycle HUD: minimal / debug / hidden |
 | `Z` | Reset camera |
 | `Q` / `Esc` | Quit |
 

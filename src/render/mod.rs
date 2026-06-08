@@ -34,6 +34,27 @@ impl CameraMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HudMode {
+    Minimal,
+    Debug,
+    Hidden,
+}
+
+impl HudMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Minimal => Self::Debug,
+            Self::Debug => Self::Hidden,
+            Self::Hidden => Self::Minimal,
+        }
+    }
+
+    pub fn is_visible(self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
+}
+
 /// Weighted perceptual distance squared (green 2x, red 1.5x, blue 1x sensitivity).
 fn perceptual_dist_sq(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> u32 {
     let dr = r1 as i32 - r2 as i32;
@@ -274,8 +295,11 @@ pub struct AppState {
     pub render_state: RenderState,
     pub halfblock_cells: Vec<HalfblockCell>,
     pub hud_string_buf: String,
+    #[cfg_attr(not(feature = "metal"), allow(dead_code))]
+    pub scene_label: String,
     pub input_state: crate::input::state::InputState,
     pub show_hud: bool,
+    pub hud_mode: HudMode,
     pub camera_mode: CameraMode,
     pub move_speed: f32,
     pub frame_count: u64,

@@ -748,6 +748,13 @@ fn main() -> AppResult<()> {
     let backend = Backend::Cpu;
 
     let mut splats = load_splats_from_cli(&cli)?;
+    let scene_label = cli
+        .input
+        .as_ref()
+        .and_then(|path| path.file_stem())
+        .and_then(|name| name.to_str())
+        .unwrap_or("demo")
+        .to_string();
     #[cfg(feature = "metal")]
     let metal_lod_requested_splat_count = cli.metal_lod_splat_count;
     #[cfg(feature = "metal")]
@@ -835,8 +842,10 @@ fn main() -> AppResult<()> {
         },
         halfblock_cells: Vec::with_capacity(width * rows.max(1) as usize),
         hud_string_buf: String::with_capacity(512),
+        scene_label,
         input_state: input::state::InputState::default(),
         show_hud: true,
+        hud_mode: render::HudMode::Minimal,
         camera_mode: CameraMode::Free,
         move_speed: 0.15,
         frame_count: 0,

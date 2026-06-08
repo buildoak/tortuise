@@ -46,16 +46,16 @@ Runtime behavior:
 
 - Kitty mode is available only with the `metal` feature.
 - The renderer uses the Metal packed framebuffer as the source of truth.
-- When HUD is visible, Kitty mode reserves the top and bottom terminal rows for
-  normal text and places the image between them.
+- When HUD is visible, Kitty mode draws a fixed-pixel bitmap HUD into the image
+  payload. It does not reserve terminal text rows.
 - Live Kitty mode clears stale images when switching from Kitty to text modes.
   It alternates between two Kitty image ids, writes the new frame first, and
   then deletes the previous id. This avoids visible terminal background flicker
   and reduces same-image replacement shimmer in Ghostty.
 - Each frame is converted to RGBA8, base64 encoded, and emitted as Kitty direct
   image data chunks.
-- HUD telemetry reports raw RGBA bytes, base64 bytes, and chunk count as
-  `Kitty:<payload>B/<base64>B <chunks>ch`.
+- HUD telemetry reports canvas resolution, render path, splat counts, Kitty
+  transport timing, and payload/chunk counters.
 - If Metal is unavailable or fails, the app falls back to halfblock rendering.
 
 The current live path sends a full RGBA frame. Dirty-frame updates, placement
