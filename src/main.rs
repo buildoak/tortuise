@@ -163,6 +163,14 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(
         long,
+        value_name = "MS",
+        default_value_t = 33,
+        help = "Minimum live Kitty frame interval in milliseconds"
+    )]
+    kitty_frame_ms: u64,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
         value_name = "exact|fast-preview|turbo",
         help = "Metal quality tier; exact preserves correctness, fast-preview/turbo are approximate"
     )]
@@ -497,6 +505,10 @@ fn apply_kitty_transport_overrides(cli: &Cli) -> AppResult<()> {
         "TORTUISE_KITTY_SCALE_DIVISOR",
         cli.kitty_scale_divisor.to_string(),
     );
+    if cli.kitty_frame_ms == 0 {
+        return Err("--kitty-frame-ms must be greater than 0".into());
+    }
+    std::env::set_var("TORTUISE_KITTY_FRAME_MS", cli.kitty_frame_ms.to_string());
     Ok(())
 }
 
@@ -706,6 +718,8 @@ fn main() -> AppResult<()> {
         #[cfg(feature = "metal")]
         kitty_chunks: 0,
         #[cfg(feature = "metal")]
+        kitty_write_ms: 0.0,
+        #[cfg(feature = "metal")]
         metal_backend: metal_backend.take(),
         #[cfg(feature = "metal")]
         last_gpu_error: None,
@@ -832,6 +846,11 @@ mod tests {
         cli.kitty_scale_divisor = 0;
         let err = apply_kitty_transport_overrides(&cli).unwrap_err();
         assert!(err.to_string().contains("--kitty-scale-divisor"));
+
+        cli.kitty_scale_divisor = 1;
+        cli.kitty_frame_ms = 0;
+        let err = apply_kitty_transport_overrides(&cli).unwrap_err();
+        assert!(err.to_string().contains("--kitty-frame-ms"));
     }
 
     #[test]

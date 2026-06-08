@@ -88,8 +88,11 @@ pub fn draw_hud(
     if app_state.render_mode == RenderMode::Kitty {
         write!(
             hud,
-            "  Kitty:{}B/{}B {}ch",
-            app_state.kitty_payload_bytes, app_state.kitty_base64_bytes, app_state.kitty_chunks
+            "  Kitty:{}B/{}B {}ch {:.1}ms",
+            app_state.kitty_payload_bytes,
+            app_state.kitty_base64_bytes,
+            app_state.kitty_chunks,
+            app_state.kitty_write_ms
         )
         .map_err(|_| io::Error::other("failed to format HUD"))?;
     }

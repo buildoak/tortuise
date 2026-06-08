@@ -370,6 +370,10 @@ fn write_kitty_rgba_direct(
     Ok((encoded.len(), chunks))
 }
 
+pub fn delete_kitty_image(stdout: &mut impl Write, image_id: u32) -> io::Result<()> {
+    write!(stdout, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")
+}
+
 #[cfg_attr(not(feature = "metal"), allow(dead_code))]
 fn kitty_payload_format_from_env() -> KittyPayloadFormat {
     std::env::var("TORTUISE_KITTY_FORMAT")
@@ -468,6 +472,10 @@ pub fn render_kitty_frame(
         }
     }
 
+    let write_start = Instant::now();
+    if app_state.kitty_payload_bytes > 0 {
+        delete_kitty_image(stdout, app_state.kitty_image_id)?;
+    }
     queue!(stdout, cursor::MoveTo(0, image_start_row as u16))?;
     let (base64_bytes, chunks) = write_kitty_rgba_direct(
         stdout,
@@ -482,6 +490,7 @@ pub fn render_kitty_frame(
     app_state.kitty_payload_bytes = payload.len();
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
+    app_state.kitty_write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
     app_state.visible_splat_count = app_state.splats.len();
     Ok(())
 }
@@ -526,6 +535,13 @@ mod tests {
         let mut out = Vec::new();
         packed_framebuffer_to_rgb(&[0x44332211], &mut out);
         assert_eq!(out, vec![0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn kitty_delete_image_uses_id_specific_quiet_delete() {
+        let mut out = Vec::new();
+        delete_kitty_image(&mut out, 7).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "\x1b_Ga=d,d=i,i=7,q=2\x1b\\");
     }
 
     #[test]

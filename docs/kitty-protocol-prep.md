@@ -17,7 +17,8 @@ Transport/quality knobs:
 ```bash
 cargo run --features metal --release -- "$SCENE" --kitty \
   --kitty-format rgb \
-  --kitty-scale-divisor 2
+  --kitty-scale-divisor 2 \
+  --kitty-frame-ms 33
 ```
 
 - `--camera-pos x,y,z` and `--look-at x,y,z` set the live viewer's initial
@@ -31,6 +32,9 @@ cargo run --features metal --release -- "$SCENE" --kitty \
   bandwidth/quality tradeoff for interactive preview. For compact scenes such
   as Bee, prefer divisor `1` or `2`; divisor `4` can make the splat effectively
   disappear at normal terminal dimensions.
+- `--kitty-frame-ms N` sets the minimum live Kitty image-submit interval. The
+  default is `33`ms because terminal image decode/composite can be the real
+  bottleneck even when Metal render FPS is high.
 
 The normal `M` render-mode cycle includes:
 
@@ -44,6 +48,9 @@ Runtime behavior:
 - The renderer uses the Metal packed framebuffer as the source of truth.
 - When HUD is visible, Kitty mode reserves the top and bottom terminal rows for
   normal text and places the image between them.
+- Live Kitty mode explicitly deletes the previous Kitty image id before sending
+  the next frame, and also clears stale images when switching from Kitty to text
+  modes.
 - Each frame is converted to RGBA8, base64 encoded, and emitted as Kitty direct
   image data chunks.
 - HUD telemetry reports raw RGBA bytes, base64 bytes, and chunk count as

@@ -215,6 +215,8 @@ mod tests {
             #[cfg(feature = "metal")]
             kitty_chunks: 0,
             #[cfg(feature = "metal")]
+            kitty_write_ms: 0.0,
+            #[cfg(feature = "metal")]
             metal_backend: None,
             #[cfg(feature = "metal")]
             last_gpu_error: None,

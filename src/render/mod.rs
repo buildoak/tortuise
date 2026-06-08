@@ -261,6 +261,8 @@ pub struct AppState {
     #[cfg(feature = "metal")]
     pub kitty_chunks: usize,
     #[cfg(feature = "metal")]
+    pub kitty_write_ms: f32,
+    #[cfg(feature = "metal")]
     pub metal_backend: Option<crate::render::metal::MetalBackend>,
     #[cfg(feature = "metal")]
     pub last_gpu_error: Option<String>,

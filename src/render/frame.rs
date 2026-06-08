@@ -5,6 +5,18 @@ use std::time::Instant;
 use super::{AppResult, AppState, CameraMode, RenderMode, FRAME_TARGET};
 
 const HALFBLOCK_FRAME_TARGET: std::time::Duration = std::time::Duration::from_millis(33);
+#[cfg(feature = "metal")]
+const DEFAULT_KITTY_FRAME_TARGET: std::time::Duration = std::time::Duration::from_millis(33);
+
+#[cfg(feature = "metal")]
+fn kitty_frame_target() -> std::time::Duration {
+    std::env::var("TORTUISE_KITTY_FRAME_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(DEFAULT_KITTY_FRAME_TARGET)
+}
 
 fn update_orbit(app_state: &mut AppState, delta_time: f32) {
     let orbit_speed = 0.9 * app_state.move_speed;
@@ -28,6 +40,15 @@ pub fn render_frame(
     let term_cols = cols as usize;
     let term_rows = rows as usize;
     let ss = app_state.supersample_factor as usize;
+
+    #[cfg(feature = "metal")]
+    if app_state.render_mode != RenderMode::Kitty && app_state.kitty_payload_bytes > 0 {
+        super::frame_kitty::delete_kitty_image(stdout, app_state.kitty_image_id)?;
+        app_state.kitty_payload_bytes = 0;
+        app_state.kitty_base64_bytes = 0;
+        app_state.kitty_chunks = 0;
+        app_state.kitty_write_ms = 0.0;
+    }
 
     match app_state.render_mode {
         RenderMode::Halfblock => {
@@ -145,10 +166,11 @@ pub fn run_app_loop(
         };
 
         let spent = frame_start.elapsed();
-        let target = if app_state.render_mode == RenderMode::Halfblock {
-            HALFBLOCK_FRAME_TARGET
-        } else {
-            FRAME_TARGET
+        let target = match app_state.render_mode {
+            RenderMode::Halfblock => HALFBLOCK_FRAME_TARGET,
+            #[cfg(feature = "metal")]
+            RenderMode::Kitty => kitty_frame_target(),
+            _ => FRAME_TARGET,
         };
         if spent < target {
             std::thread::sleep(target - spent);
