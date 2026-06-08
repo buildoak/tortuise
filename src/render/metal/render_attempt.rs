@@ -1006,8 +1006,8 @@ fn metal_fast_alpha_cutoff() -> f32 {
         .ok()
         .and_then(|value| value.trim().parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value > 0.0)
-        .unwrap_or(0.01)
-        .clamp(0.0001, 0.05)
+        .unwrap_or(0.001)
+        .clamp(0.000001, 0.05)
 }
 
 fn metal_fast_tile_budget(fast_quality_enabled: bool) -> u32 {
@@ -1019,7 +1019,7 @@ fn metal_fast_tile_budget(fast_quality_enabled: bool) -> u32 {
         .and_then(|value| value.trim().parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(16_384)
-        .clamp(256, 65_535)
+        .clamp(256, 1_048_576)
 }
 
 fn set_bytes_f32(encoder: &metal::ComputeCommandEncoderRef, index: u64, value: f32) {

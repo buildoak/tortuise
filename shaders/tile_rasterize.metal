@@ -160,21 +160,20 @@ kernel void rasterize_tiles(
 
                 // Quadratic form for Gaussian exponent: q = [dx dy] * inv_cov * [dx dy]^T.
                 const float q = dx * dx * inv_a + 2.0f * dx * dy * inv_b + dy * dy * inv_c;
-                const float q_limit = fast_quality != 0u ? 24.0f : 32.0f;
+                const float q_limit = fast_quality != 0u ? 28.0f : 32.0f;
                 if (q > q_limit) {
                     continue;
                 }
 
                 const float g = exp(-0.5f * q);
-                const float min_gaussian_contrib =
-                    fast_quality != 0u ? 0.002f : MIN_GAUSSIAN_CONTRIB;
+                const float min_gaussian_contrib = MIN_GAUSSIAN_CONTRIB;
                 if (g < min_gaussian_contrib) {
                     continue;
                 }
 
                 const float alpha = shared_opacity[i] * g;
                 const float weight = alpha * transmittance;
-                const float min_weight = fast_quality != 0u ? 5e-4f : 1e-4f;
+                const float min_weight = 1e-4f;
                 if (weight < min_weight) {
                     continue;
                 }
