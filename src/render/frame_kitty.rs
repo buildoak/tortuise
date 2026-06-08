@@ -500,6 +500,8 @@ pub fn render_kitty_frame(
         .saturating_mul(ss)
         .div_ceil(scale_divisor)
         .max(1);
+    app_state.last_render_width = width;
+    app_state.last_render_height = height;
     super::pipeline::resize_render_state(&mut app_state.render_state, width, height);
 
     if let Err(err) = render_metal_framebuffer(app_state, width, height) {

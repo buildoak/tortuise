@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "description": "Canonical camera packs for Metal polish packets. Paths are local defaults only; runners may override or skip missing scenes.",
+  "scenes": [
+    {
+      "scene_id": "luigi",
+      "path": "scenes/luigi.ply",
+      "required": true,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 4.0],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        },
+        {
+          "angle_id": "temporal-arc-000",
+          "camera_pos": [0.0, 0.0, 4.0],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "temporal"
+        },
+        {
+          "angle_id": "temporal-arc-001",
+          "camera_pos": [0.3, 0.0, 3.95],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "temporal"
+        }
+      ]
+    },
+    {
+      "scene_id": "bonsai",
+      "path": "scenes/bonsai.splat",
+      "required": true,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 4.0],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        }
+      ]
+    },
+    {
+      "scene_id": "bee",
+      "path": "/Users/otonashi/thinking/external/splats/imported/staged/supersplat/bee/bee_cf6ac78e.ply",
+      "required": true,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 0.5],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        },
+        {
+          "angle_id": "calibrated-3q",
+          "camera_pos": [-0.35, 0.0, 0.35],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        },
+        {
+          "angle_id": "temporal-arc-000",
+          "camera_pos": [-0.20, 0.0, 0.45],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "temporal"
+        },
+        {
+          "angle_id": "temporal-arc-001",
+          "camera_pos": [-0.10, 0.0, 0.48],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "temporal"
+        }
+      ]
+    },
+    {
+      "scene_id": "ramen",
+      "path": "/Users/otonashi/thinking/external/splats/imported/staged/supersplat/ramen/ramen_d281f99f.ply",
+      "required": true,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 1.2],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        }
+      ]
+    },
+    {
+      "scene_id": "ignatius",
+      "path": "/Users/otonashi/thinking/external/splats/imported/staged/benchmarks/ignatius/ignatius_10000_stable.splat",
+      "required": true,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 4.0],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        }
+      ]
+    },
+    {
+      "scene_id": "meetingroom",
+      "path": "/Users/otonashi/thinking/external/splats/imported/staged/benchmarks/meetingroom/meetingroom_30k_20000_stable_dec50.splat",
+      "required": false,
+      "angles": [
+        {
+          "angle_id": "calibrated-front",
+          "camera_pos": [0.0, 0.0, 4.0],
+          "look_at": [0.0, 0.0, 0.0],
+          "fov_deg": 60.0,
+          "tier": "calibrated"
+        }
+      ]
+    }
+  ],
+  "qualities": [
+    {
+      "quality_id": "exact",
+      "probe_backends": "both",
+      "extra_args": [],
+      "release_claim": true
+    },
+    {
+      "quality_id": "fast-preview",
+      "probe_backends": "metal",
+      "extra_args": ["--metal-quality", "fast-preview"],
+      "release_claim": false
+    },
+    {
+      "quality_id": "turbo",
+      "probe_backends": "metal",
+      "extra_args": ["--metal-quality", "turbo"],
+      "release_claim": false
+    }
+  ]
+}

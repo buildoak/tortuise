@@ -1864,10 +1864,13 @@ fn write_manifest_json(
     let timing_summary = timing
         .map(probe_timing_summary_json)
         .unwrap_or_else(|| "null".to_string());
+    let camera = probe_camera_json(&config.camera);
+    let provenance = probe_provenance_json();
     let json = format!(
         concat!(
             "{{\n",
-            "  \"version\": 1,\n",
+            "  \"version\": 2,\n",
+            "  \"schema_version\": 2,\n",
             "  \"case\": \"{}\",\n",
             "  \"backend\": \"{}\",\n",
             "  \"width\": {},\n",
@@ -1881,6 +1884,8 @@ fn write_manifest_json(
             "  \"kitty_artifacts\": {},\n",
             "  \"stage_telemetry\": {},\n",
             "  \"timing_enabled\": {},\n",
+            "  \"camera\": {},\n",
+            "  \"provenance\": {},\n",
             "  \"artifacts\": {{\n",
             "    \"contact_sheet\": \"{}\",\n",
             "    \"inspect_contact_sheet\": \"{}\",\n",
@@ -1906,6 +1911,8 @@ fn write_manifest_json(
         config.kitty_artifacts,
         config.stage_telemetry,
         config.timing,
+        camera,
+        provenance,
         json_escape(&display_path(contact_sheet_path)),
         json_escape(&display_path(inspect_contact_sheet_path)),
         diff_summary,
@@ -2054,6 +2061,100 @@ fn optional_path_json(path: Option<&Path>) -> String {
     }
 }
 
+fn vec3_json(value: Vec3) -> String {
+    format!("[{:.6},{:.6},{:.6}]", value.x, value.y, value.z)
+}
+
+fn probe_camera_json(camera: &ProbeCameraSpec) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"position\":{},",
+            "\"target\":{},",
+            "\"fov_deg\":{:.6},",
+            "\"near\":{:.6},",
+            "\"far\":{:.6}",
+            "}}"
+        ),
+        vec3_json(camera.position),
+        vec3_json(camera.target),
+        camera.fov.to_degrees(),
+        camera.near,
+        camera.far
+    )
+}
+
+fn json_string_array(values: &[String]) -> String {
+    let items = values
+        .iter()
+        .map(|value| format!("\"{}\"", json_escape(value)))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", items)
+}
+
+fn allowlisted_env_json() -> String {
+    const ENV_KEYS: &[&str] = &[
+        "TORTUISE_METAL_QUALITY",
+        "TORTUISE_METAL_SORT_PATH",
+        "TORTUISE_METAL_LOCAL_TILE_SORT",
+        "TORTUISE_METAL_FAST_UNSORTED",
+        "TORTUISE_METAL_FAST_APPROX",
+        "TORTUISE_METAL_FAST_DEPTH_BITS",
+        "TORTUISE_METAL_FAST_ALPHA_CUTOFF",
+        "TORTUISE_METAL_FAST_TILE_BUDGET",
+        "TORTUISE_METAL_SNUG_TILE_BOUNDS",
+        "TORTUISE_KITTY_FORMAT",
+        "TORTUISE_KITTY_SCALE_DIVISOR",
+        "TORTUISE_KITTY_FRAME_MS",
+    ];
+    let pairs = ENV_KEYS
+        .iter()
+        .filter_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| format!("\"{}\":\"{}\"", json_escape(key), json_escape(&value)))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{}}}", pairs)
+}
+
+fn optional_env_string_json(key: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|value| format!("\"{}\"", json_escape(&value)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn probe_provenance_json() -> String {
+    let argv = std::env::args().collect::<Vec<_>>();
+    format!(
+        concat!(
+            "{{",
+            "\"argv\":{},",
+            "\"allowlisted_env\":{},",
+            "\"run_id\":{},",
+            "\"scene_id\":{},",
+            "\"angle_id\":{},",
+            "\"quality_id\":{},",
+            "\"git_hash\":{},",
+            "\"git_dirty_entries\":{},",
+            "\"machine\":{}",
+            "}}"
+        ),
+        json_string_array(&argv),
+        allowlisted_env_json(),
+        optional_env_string_json("TORTUISE_PROBE_RUN_ID"),
+        optional_env_string_json("TORTUISE_PROBE_SCENE_ID"),
+        optional_env_string_json("TORTUISE_PROBE_ANGLE_ID"),
+        optional_env_string_json("TORTUISE_PROBE_QUALITY_ID"),
+        optional_env_string_json("TORTUISE_PROBE_GIT_HASH"),
+        optional_env_string_json("TORTUISE_PROBE_GIT_DIRTY_ENTRIES"),
+        optional_env_string_json("TORTUISE_PROBE_MACHINE")
+    )
+}
+
 fn bbox_delta_json(delta: &ProbeSignedBoundingBoxDelta) -> String {
     format!(
         "{{\"min_x\":{},\"min_y\":{},\"max_x\":{},\"max_y\":{}}}",
@@ -2182,6 +2283,7 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
     format!(
         concat!(
             "{{",
+            "\"schema_version\":2,",
             "\"lod_mode\":\"{}\",",
             "\"lod_mapping\":\"{}\",",
             "\"lod_requested_splat_count\":{},",
@@ -2405,6 +2507,7 @@ fn write_cpu_stage_telemetry_json(
     let json = format!(
         concat!(
             "{{\n",
+            "  \"schema_version\": 2,\n",
             "  \"source\": \"cpu_project_and_cull_splats\",\n",
             "  \"input_splat_count\": {},\n",
             "  \"projected_splat_count\": {},\n",

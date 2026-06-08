@@ -223,6 +223,8 @@ pub fn render_halfblock_frame(
     let ss = app_state.supersample_factor as usize;
     let ss_width = term_cols * ss;
     let ss_height = term_rows * 2 * ss;
+    app_state.last_render_width = ss_width;
+    app_state.last_render_height = ss_height;
 
     super::pipeline::resize_render_state(&mut app_state.render_state, ss_width, ss_height);
 

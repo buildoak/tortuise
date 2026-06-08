@@ -37,6 +37,24 @@ fn duration_ms(duration: std::time::Duration) -> f64 {
 }
 
 #[cfg(feature = "metal")]
+fn kitty_scale_divisor_for_telemetry() -> usize {
+    std::env::var("TORTUISE_KITTY_SCALE_DIVISOR")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
+}
+
+#[cfg(feature = "metal")]
+fn kitty_frame_ms_for_telemetry() -> u64 {
+    std::env::var("TORTUISE_KITTY_FRAME_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(33)
+}
+
+#[cfg(feature = "metal")]
 fn metal_gpu_wait_ms(app_state: &AppState) -> f64 {
     app_state
         .metal_backend
@@ -72,6 +90,16 @@ fn build_live_frame_telemetry(
         render_ms,
         flush_ms,
         effective_path: app_state.effective_render_path,
+        render_width: app_state.last_render_width,
+        render_height: app_state.last_render_height,
+        terminal_cols: app_state.last_terminal_cols,
+        terminal_rows: app_state.last_terminal_rows,
+        camera_x: app_state.camera.position.x as f64,
+        camera_y: app_state.camera.position.y as f64,
+        camera_z: app_state.camera.position.z as f64,
+        camera_yaw: app_state.camera.yaw as f64,
+        camera_pitch: app_state.camera.pitch as f64,
+        camera_fov_deg: app_state.camera.fov.to_degrees() as f64,
         source_splat_count: app_state.splats.len(),
         active_splat_count: app_state.splats.len(),
         valid_count: app_state.visible_splat_count,
@@ -88,6 +116,12 @@ fn build_live_frame_telemetry(
         telemetry.payload_bytes = app_state.kitty_payload_bytes;
         telemetry.base64_bytes = app_state.kitty_base64_bytes;
         telemetry.chunks = app_state.kitty_chunks;
+        telemetry.kitty_format = match std::env::var("TORTUISE_KITTY_FORMAT") {
+            Ok(value) if value.trim() == "rgb" => "rgb",
+            _ => "rgba",
+        };
+        telemetry.kitty_scale_divisor = kitty_scale_divisor_for_telemetry();
+        telemetry.kitty_frame_ms = kitty_frame_ms_for_telemetry();
         if app_state.effective_render_path.starts_with("metal_") {
             let Some(mb) = app_state.metal_backend.as_ref() else {
                 return telemetry;
@@ -107,9 +141,16 @@ fn build_live_frame_telemetry(
             telemetry.source_splat_count = metal.source_splat_count;
             telemetry.active_splat_count = metal.active_splat_count;
             telemetry.valid_count = metal.valid_count as usize;
+            telemetry.estimated_overlaps = metal.estimated_overlaps;
+            telemetry.attempt_sort_count = metal.attempt_sort_count;
             telemetry.actual_total_overlaps = metal.actual_total_overlaps;
             telemetry.overflow_flag = metal.overflow_flag;
             telemetry.retry_count = metal.retry_count;
+            telemetry.tile_entries = metal.tile_density.total_tile_entries;
+            telemetry.max_tile_range = metal.tile_density.max_tile_range;
+            telemetry.p95_tile_range = metal.tile_density.p95_tile_range;
+            telemetry.p99_tile_range = metal.tile_density.p99_tile_range;
+            telemetry.stage_timing_count = metal.stage_timing_count;
         }
     }
 
@@ -126,6 +167,8 @@ pub fn render_frame(
     let term_cols = cols as usize;
     let term_rows = rows as usize;
     let ss = app_state.supersample_factor as usize;
+    app_state.last_terminal_cols = term_cols;
+    app_state.last_terminal_rows = term_rows;
 
     #[cfg(feature = "metal")]
     if app_state.render_mode != RenderMode::Kitty && app_state.kitty_payload_bytes > 0 {
@@ -159,6 +202,8 @@ pub fn render_frame(
             app_state.effective_render_path = "cpu_text";
             let proj_w = term_cols;
             let proj_h = term_rows * 2;
+            app_state.last_render_width = proj_w;
+            app_state.last_render_height = proj_h;
             super::pipeline::cpu_project_and_sort(app_state, proj_w, proj_h);
 
             match app_state.render_mode {
