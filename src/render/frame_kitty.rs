@@ -473,9 +473,6 @@ pub fn render_kitty_frame(
     }
 
     let write_start = Instant::now();
-    if app_state.kitty_payload_bytes > 0 {
-        delete_kitty_image(stdout, app_state.kitty_image_id)?;
-    }
     queue!(stdout, cursor::MoveTo(0, image_start_row as u16))?;
     let (base64_bytes, chunks) = write_kitty_rgba_direct(
         stdout,

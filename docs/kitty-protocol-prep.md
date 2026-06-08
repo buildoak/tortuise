@@ -48,9 +48,9 @@ Runtime behavior:
 - The renderer uses the Metal packed framebuffer as the source of truth.
 - When HUD is visible, Kitty mode reserves the top and bottom terminal rows for
   normal text and places the image between them.
-- Live Kitty mode explicitly deletes the previous Kitty image id before sending
-  the next frame, and also clears stale images when switching from Kitty to text
-  modes.
+- Live Kitty mode clears stale images when switching from Kitty to text modes.
+  It does not delete the image before every frame, because that causes visible
+  terminal background flicker in Ghostty.
 - Each frame is converted to RGBA8, base64 encoded, and emitted as Kitty direct
   image data chunks.
 - HUD telemetry reports raw RGBA bytes, base64 bytes, and chunk count as
