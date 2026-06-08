@@ -227,19 +227,22 @@ fn draw_payload_text(
 ) {
     let (width, height) = dims;
     let mut cursor_x = x;
-    let glyph_w = 5 * scale;
-    let advance = 6 * scale;
+    let glyph_w = 3 * scale;
+    let advance = 4 * scale;
+    const SRC_ROWS: [usize; 5] = [0, 1, 3, 5, 6];
+    const SRC_COLS: [usize; 3] = [0, 2, 4];
     for ch in text.chars() {
         if cursor_x >= width {
             break;
         }
         let rows = glyph_rows(ch);
-        for (row_idx, bits) in rows.iter().enumerate() {
-            for col in 0..5 {
-                if bits & (1 << (4 - col)) == 0 {
+        for (row_idx, source_row) in SRC_ROWS.iter().enumerate() {
+            let bits = rows[*source_row];
+            for (col_idx, source_col) in SRC_COLS.iter().enumerate() {
+                if bits & (1 << (4 - source_col)) == 0 {
                     continue;
                 }
-                let px = cursor_x + col * scale;
+                let px = cursor_x + col_idx * scale;
                 let py = y + row_idx * scale;
                 fill_payload_rect(
                     payload,
@@ -316,8 +319,8 @@ fn draw_kitty_bitmap_hud(
         return;
     }
 
-    let scale = if height >= 180 && width >= 320 { 2 } else { 1 };
-    let line_h = 7 * scale;
+    let scale = 1usize;
+    let line_h = 5 * scale;
     let pad = 3 * scale;
     let bar_h = match app_state.hud_mode {
         HudMode::Debug => line_h * 2 + pad * 3,
