@@ -46,13 +46,10 @@ Runtime behavior:
 
 - Kitty mode is available only with the `metal` feature.
 - The renderer uses the Metal packed framebuffer as the source of truth.
-- When HUD is visible, Kitty mode first tries a separate pixel-calibrated Kitty
-  HUD layer. It uses terminal pixel metrics from `TIOCGWINSZ`, keeps the scene
-  image and HUD image ids separate, and reserves enough terminal rows for a
-  stable physical HUD height. If pixel metrics are missing or the terminal is
-  too small, it falls back to the normal terminal-cell HUD.
-- `TORTUISE_KITTY_PIXEL_HUD=0` disables the Kitty HUD layer. `TORTUISE_KITTY_HUD_PX=N`
-  changes the target HUD bar height in pixels; the default is 24.
+- When HUD is visible, Kitty mode reserves top and bottom terminal rows for the
+  normal crisp terminal HUD. Experimental bitmap HUD can be enabled with
+  `TORTUISE_KITTY_BITMAP_HUD=1`, but it is not the default because terminal
+  image scaling can blur/distort in-image text.
 - Live Kitty mode clears stale images when switching from Kitty to text modes.
   It alternates between two Kitty image ids, writes the new frame first, and
   then deletes the previous id. This avoids visible terminal background flicker

@@ -294,6 +294,7 @@ pub struct AppState {
     pub projected_splats: Vec<ProjectedSplat>,
     pub render_state: RenderState,
     pub halfblock_cells: Vec<HalfblockCell>,
+    pub hud_string_buf: String,
     #[cfg_attr(not(feature = "metal"), allow(dead_code))]
     pub scene_label: String,
     pub input_state: crate::input::state::InputState,
@@ -331,8 +332,6 @@ pub struct AppState {
     pub kitty_image_id: u32,
     #[cfg(feature = "metal")]
     pub kitty_visible_image_id: u32,
-    #[cfg(feature = "metal")]
-    pub kitty_pixel_hud_active: bool,
     #[cfg(feature = "metal")]
     pub kitty_payload_bytes: usize,
     #[cfg(feature = "metal")]

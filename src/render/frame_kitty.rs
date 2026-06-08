@@ -9,10 +9,6 @@ use crossterm::{cursor, queue};
 use super::{AppState, Backend, HudMode, MetalLodMode};
 
 pub const KITTY_DIRECT_CHUNK_SIZE: usize = 4096;
-#[cfg(feature = "metal")]
-const KITTY_TOP_HUD_IMAGE_ID: u32 = 3;
-#[cfg(feature = "metal")]
-const KITTY_BOTTOM_HUD_IMAGE_ID: u32 = 4;
 
 pub fn kitty_base64_len(payload_bytes: usize) -> usize {
     payload_bytes.div_ceil(3) * 4
@@ -87,24 +83,6 @@ struct KittyImageSpec {
     term_cols: usize,
     term_rows: usize,
     format: KittyPayloadFormat,
-}
-
-#[cfg(feature = "metal")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TerminalPixelMetrics {
-    width_px: usize,
-    height_px: usize,
-    cell_width_px: usize,
-    cell_height_px: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct KittyHudPlacement {
-    top_rows: usize,
-    bottom_rows: usize,
-    width_px: usize,
-    top_height_px: usize,
-    bottom_height_px: usize,
 }
 
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
@@ -329,169 +307,61 @@ fn gpu_wait_ms(app_state: &AppState) -> f64 {
 }
 
 #[cfg(feature = "metal")]
-fn kitty_pixel_hud_enabled() -> bool {
-    !matches!(
-        std::env::var("TORTUISE_KITTY_PIXEL_HUD")
-            .unwrap_or_else(|_| "auto".to_string())
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "0" | "false" | "off" | "no"
-    )
-}
-
-#[cfg(feature = "metal")]
-fn env_usize(key: &str, fallback: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(fallback)
-}
-
-#[cfg(all(feature = "metal", unix))]
-fn query_terminal_pixel_metrics(
-    term_cols: usize,
-    term_rows: usize,
-) -> Option<TerminalPixelMetrics> {
-    if term_cols == 0 || term_rows == 0 {
-        return None;
-    }
-    let mut ws = std::mem::MaybeUninit::<libc::winsize>::zeroed();
-    let rc = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, ws.as_mut_ptr()) };
-    if rc != 0 {
-        return None;
-    }
-    let ws = unsafe { ws.assume_init() };
-    let width_px = ws.ws_xpixel as usize;
-    let height_px = ws.ws_ypixel as usize;
-    if width_px == 0 || height_px == 0 {
-        return None;
-    }
-    Some(TerminalPixelMetrics {
-        width_px,
-        height_px,
-        cell_width_px: (width_px / term_cols).max(1),
-        cell_height_px: (height_px / term_rows).max(1),
-    })
-}
-
-#[cfg(all(feature = "metal", not(unix)))]
-fn query_terminal_pixel_metrics(
-    _term_cols: usize,
-    _term_rows: usize,
-) -> Option<TerminalPixelMetrics> {
-    None
-}
-
-#[cfg(feature = "metal")]
-fn rows_for_pixel_height(target_px: usize, cell_height_px: usize) -> usize {
-    target_px.div_ceil(cell_height_px.max(1)).max(1)
-}
-
-#[cfg(feature = "metal")]
-fn kitty_pixel_hud_placement(
-    show_hud: bool,
-    hud_mode: HudMode,
-    term_cols: usize,
-    term_rows: usize,
-) -> Option<KittyHudPlacement> {
-    if !show_hud || hud_mode == HudMode::Hidden || !kitty_pixel_hud_enabled() {
-        return None;
-    }
-    let metrics = query_terminal_pixel_metrics(term_cols, term_rows)?;
-    let target_px = env_usize("TORTUISE_KITTY_HUD_PX", 24).clamp(14, 96);
-    let top_target_px = match hud_mode {
-        HudMode::Debug => target_px.saturating_mul(2),
-        HudMode::Minimal => target_px,
-        HudMode::Hidden => return None,
-    };
-    let top_rows = rows_for_pixel_height(top_target_px, metrics.cell_height_px);
-    let bottom_rows = rows_for_pixel_height(target_px, metrics.cell_height_px);
-    if term_rows <= top_rows.saturating_add(bottom_rows).saturating_add(2) {
-        return None;
-    }
-    Some(KittyHudPlacement {
-        top_rows,
-        bottom_rows,
-        width_px: metrics.width_px,
-        top_height_px: top_rows * metrics.cell_height_px,
-        bottom_height_px: bottom_rows * metrics.cell_height_px,
-    })
-}
-
-#[cfg(feature = "metal")]
-fn draw_kitty_hud_bar(
+fn draw_kitty_bitmap_hud(
     app_state: &AppState,
     payload: &mut [u8],
     width: usize,
     height: usize,
-    top: bool,
+    format: KittyPayloadFormat,
+    scale_divisor: usize,
 ) {
-    if app_state.hud_mode == HudMode::Hidden || width < 24 || height < 10 {
+    if std::env::var("TORTUISE_KITTY_BITMAP_HUD").ok().as_deref() != Some("1")
+        || app_state.hud_mode == HudMode::Hidden
+        || width < 80
+        || height < 24
+    {
         return;
     }
 
-    let scale = (height / 12).clamp(1, 4);
+    let scale = 1usize;
     let line_h = 5 * scale;
     let pad = 3 * scale;
+    let bar_h = match app_state.hud_mode {
+        HudMode::Debug => line_h * 2 + pad * 3,
+        HudMode::Minimal => line_h + pad * 2,
+        HudMode::Hidden => return,
+    };
+    let bottom_h = line_h + pad * 2;
     let bg = [0, 0, 0, 235];
     let fg = [238, 242, 246, 255];
     let dim = [182, 190, 198, 255];
     let warn = [255, 210, 72, 255];
 
+    fill_payload_rect(payload, (width, height), format, 0, 0, width, bar_h, bg);
     fill_payload_rect(
         payload,
         (width, height),
-        KittyPayloadFormat::Rgb24,
+        format,
         0,
-        0,
+        height.saturating_sub(bottom_h),
         width,
-        height,
+        bottom_h,
         bg,
     );
 
-    if !top {
-        let controls = match app_state.camera_mode {
-            super::CameraMode::Free => "ARROWS | WASD | SPACE ORBIT | TAB HUD | Q",
-            super::CameraMode::Orbit => "ARROWS ORBIT | SPACE FREE | TAB HUD | Z RESET | Q",
-        };
-        draw_payload_text(
-            payload,
-            (width, height),
-            KittyPayloadFormat::Rgb24,
-            pad,
-            pad,
-            scale,
-            controls,
-            dim,
-        );
-        return;
-    }
-
-    let ss = app_state.supersample_factor.max(1);
     let top = format!(
         "FPS {:.1} | {}X{} | KITTY | {} | {}",
         app_state.fps,
-        app_state.last_render_width.max(1),
-        app_state.last_render_height.max(1),
+        width,
+        height,
         app_state.scene_label,
         app_state.camera_mode.name()
     );
-    draw_payload_text(
-        payload,
-        (width, height),
-        KittyPayloadFormat::Rgb24,
-        pad,
-        pad,
-        scale,
-        &top,
-        fg,
-    );
+    draw_payload_text(payload, (width, height), format, pad, pad, scale, &top, fg);
 
     if app_state.hud_mode == HudMode::Debug {
         let debug = format!(
-            "SPLATS {} | GPU {:.1}MS | KITTY C{:.1} E{:.1} W{:.1} F{:.1}MS | {} | A{} T{} | SS {}",
+            "SPLATS {} | GPU {:.1}MS | KITTY C{:.1} E{:.1} W{:.1} F{:.1}MS | {} | A{} T{} | SCALE {}",
             splat_label(app_state),
             gpu_wait_ms(app_state),
             app_state.kitty_convert_ms,
@@ -501,12 +371,12 @@ fn draw_kitty_hud_bar(
             quality_label(),
             env_or("TORTUISE_METAL_FAST_ALPHA_CUTOFF", "-"),
             env_or("TORTUISE_METAL_FAST_TILE_BUDGET", "-"),
-            ss,
+            scale_divisor
         );
         draw_payload_text(
             payload,
             (width, height),
-            KittyPayloadFormat::Rgb24,
+            format,
             pad,
             pad * 2 + line_h,
             scale,
@@ -514,65 +384,21 @@ fn draw_kitty_hud_bar(
             warn,
         );
     }
-}
 
-#[cfg(feature = "metal")]
-fn make_kitty_hud_payload(app_state: &AppState, width: usize, height: usize, top: bool) -> Vec<u8> {
-    let mut payload = vec![0u8; width.saturating_mul(height).saturating_mul(3)];
-    draw_kitty_hud_bar(app_state, &mut payload, width, height, top);
-    payload
-}
-
-#[cfg(feature = "metal")]
-fn write_kitty_pixel_hud(
-    app_state: &AppState,
-    placement: KittyHudPlacement,
-    term_cols: usize,
-    term_rows: usize,
-    stdout: &mut impl Write,
-) -> io::Result<()> {
-    let top_payload =
-        make_kitty_hud_payload(app_state, placement.width_px, placement.top_height_px, true);
-    let bottom_payload = make_kitty_hud_payload(
-        app_state,
-        placement.width_px,
-        placement.bottom_height_px,
-        false,
+    let controls = match app_state.camera_mode {
+        super::CameraMode::Free => "ARROWS | WASD | SPACE ORBIT | TAB | Q",
+        super::CameraMode::Orbit => "ARROWS ORBIT | SPACE FREE | TAB | Z | Q",
+    };
+    draw_payload_text(
+        payload,
+        (width, height),
+        format,
+        pad,
+        height.saturating_sub(bottom_h).saturating_add(pad),
+        scale,
+        controls,
+        dim,
     );
-    let top_encoded = BASE64_STANDARD.encode(&top_payload);
-    let bottom_encoded = BASE64_STANDARD.encode(&bottom_payload);
-
-    queue!(stdout, cursor::MoveTo(0, 0))?;
-    write_kitty_encoded_direct(
-        stdout,
-        KittyImageSpec {
-            image_id: KITTY_TOP_HUD_IMAGE_ID,
-            width: placement.width_px,
-            height: placement.top_height_px,
-            term_cols,
-            term_rows: placement.top_rows,
-            format: KittyPayloadFormat::Rgb24,
-        },
-        &top_encoded,
-    )?;
-
-    queue!(
-        stdout,
-        cursor::MoveTo(0, term_rows.saturating_sub(placement.bottom_rows) as u16)
-    )?;
-    write_kitty_encoded_direct(
-        stdout,
-        KittyImageSpec {
-            image_id: KITTY_BOTTOM_HUD_IMAGE_ID,
-            width: placement.width_px,
-            height: placement.bottom_height_px,
-            term_cols,
-            term_rows: placement.bottom_rows,
-            format: KittyPayloadFormat::Rgb24,
-        },
-        &bottom_encoded,
-    )?;
-    Ok(())
 }
 
 fn validate_rgba_dimensions(width: usize, height: usize, rgba: &[u8]) -> io::Result<usize> {
@@ -857,19 +683,6 @@ pub fn delete_kitty_image(stdout: &mut impl Write, image_id: u32) -> io::Result<
     write!(stdout, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")
 }
 
-#[cfg(feature = "metal")]
-pub fn delete_kitty_hud_images(stdout: &mut impl Write) -> io::Result<()> {
-    delete_kitty_image(stdout, KITTY_TOP_HUD_IMAGE_ID)?;
-    delete_kitty_image(stdout, KITTY_BOTTOM_HUD_IMAGE_ID)?;
-    Ok(())
-}
-
-#[cfg(not(feature = "metal"))]
-#[allow(dead_code)]
-pub fn delete_kitty_hud_images(_stdout: &mut impl Write) -> io::Result<()> {
-    Ok(())
-}
-
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn next_kitty_image_id(image_id: u32) -> u32 {
     if image_id == 1 {
@@ -941,22 +754,10 @@ fn clear_kitty_transport_stats(app_state: &mut AppState) {
 }
 
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
-fn kitty_image_placement_rows(
-    show_hud: bool,
-    term_rows: usize,
-    pixel_hud: Option<KittyHudPlacement>,
-) -> (usize, usize) {
-    let reserved_hud_rows = if let Some(placement) = pixel_hud {
-        placement.top_rows.saturating_add(placement.bottom_rows)
-    } else if show_hud && term_rows > 2 {
-        2
-    } else {
-        0
-    };
+fn kitty_image_placement_rows(show_hud: bool, term_rows: usize) -> (usize, usize) {
+    let reserved_hud_rows = if show_hud && term_rows > 2 { 2 } else { 0 };
     let image_term_rows = term_rows.saturating_sub(reserved_hud_rows).max(1);
-    let image_start_row = pixel_hud
-        .map(|placement| placement.top_rows)
-        .unwrap_or(if reserved_hud_rows > 0 { 1 } else { 0 });
+    let image_start_row = if reserved_hud_rows > 0 { 1 } else { 0 };
     (image_start_row, image_term_rows)
 }
 
@@ -967,12 +768,7 @@ pub fn render_kitty_frame(
     term_rows: usize,
     stdout: &mut impl Write,
 ) -> io::Result<()> {
-    let had_pixel_hud = app_state.kitty_pixel_hud_active;
-    app_state.kitty_pixel_hud_active = false;
     if app_state.backend != Backend::Metal || app_state.metal_backend.is_none() {
-        if had_pixel_hud {
-            delete_kitty_hud_images(stdout)?;
-        }
         clear_kitty_transport_stats(app_state);
         return super::frame_halfblock::render_halfblock_frame(
             app_state, term_cols, term_rows, stdout,
@@ -981,10 +777,8 @@ pub fn render_kitty_frame(
 
     let ss = app_state.supersample_factor as usize;
     let scale_divisor = kitty_scale_divisor_from_env();
-    let pixel_hud =
-        kitty_pixel_hud_placement(app_state.show_hud, app_state.hud_mode, term_cols, term_rows);
     let (image_start_row, image_term_rows) =
-        kitty_image_placement_rows(app_state.show_hud, term_rows, pixel_hud);
+        kitty_image_placement_rows(app_state.show_hud, term_rows);
     let width = term_cols.saturating_mul(ss).div_ceil(scale_divisor).max(1);
     let height = image_term_rows
         .saturating_mul(2)
@@ -1001,9 +795,6 @@ pub fn render_kitty_frame(
             return Err(io::Error::other(format!(
                 "Metal fixed LoD render failed before CPU fallback: {err}"
             )));
-        }
-        if had_pixel_hud {
-            delete_kitty_hud_images(stdout)?;
         }
         clear_kitty_transport_stats(app_state);
         return super::frame_halfblock::render_halfblock_frame(
@@ -1034,6 +825,15 @@ pub fn render_kitty_frame(
         }
     }
     app_state.kitty_convert_ms = convert_start.elapsed().as_secs_f32() * 1000.0;
+    draw_kitty_bitmap_hud(
+        app_state,
+        &mut payload,
+        width,
+        height,
+        format,
+        scale_divisor,
+    );
+
     let encode_start = Instant::now();
     let encoded = BASE64_STANDARD.encode(&payload);
     app_state.kitty_encode_ms = encode_start.elapsed().as_secs_f32() * 1000.0;
@@ -1061,13 +861,6 @@ pub fn render_kitty_frame(
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
     app_state.kitty_write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
-    if let Some(placement) = pixel_hud {
-        write_kitty_pixel_hud(app_state, placement, term_cols, term_rows, stdout)?;
-        app_state.kitty_pixel_hud_active = true;
-    } else if had_pixel_hud {
-        delete_kitty_hud_images(stdout)?;
-        app_state.kitty_pixel_hud_active = false;
-    }
     Ok(())
 }
 
@@ -1168,28 +961,10 @@ mod tests {
 
     #[test]
     fn kitty_image_placement_reserves_terminal_hud_rows() {
-        assert_eq!(kitty_image_placement_rows(true, 40, None), (1, 38));
-        assert_eq!(kitty_image_placement_rows(false, 40, None), (0, 40));
-        assert_eq!(kitty_image_placement_rows(true, 2, None), (0, 2));
-        assert_eq!(kitty_image_placement_rows(true, 0, None), (0, 1));
-    }
-
-    #[cfg(feature = "metal")]
-    #[test]
-    fn kitty_image_placement_reserves_pixel_hud_rows() {
-        let placement = KittyHudPlacement {
-            top_rows: 4,
-            bottom_rows: 3,
-            width_px: 800,
-            top_height_px: 32,
-            bottom_height_px: 24,
-        };
-        assert_eq!(
-            kitty_image_placement_rows(true, 40, Some(placement)),
-            (4, 33)
-        );
-        assert_eq!(rows_for_pixel_height(24, 8), 3);
-        assert_eq!(rows_for_pixel_height(25, 8), 4);
+        assert_eq!(kitty_image_placement_rows(true, 40), (1, 38));
+        assert_eq!(kitty_image_placement_rows(false, 40), (0, 40));
+        assert_eq!(kitty_image_placement_rows(true, 2), (0, 2));
+        assert_eq!(kitty_image_placement_rows(true, 0), (0, 1));
     }
 
     #[test]

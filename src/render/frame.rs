@@ -171,15 +171,11 @@ pub fn render_frame(
     app_state.last_terminal_rows = term_rows;
 
     #[cfg(feature = "metal")]
-    if app_state.render_mode != RenderMode::Kitty
-        && (app_state.kitty_payload_bytes > 0 || app_state.kitty_pixel_hud_active)
-    {
+    if app_state.render_mode != RenderMode::Kitty && app_state.kitty_payload_bytes > 0 {
         super::frame_kitty::delete_kitty_image(stdout, 1)?;
         super::frame_kitty::delete_kitty_image(stdout, 2)?;
-        super::frame_kitty::delete_kitty_hud_images(stdout)?;
         app_state.kitty_image_id = 1;
         app_state.kitty_visible_image_id = 0;
-        app_state.kitty_pixel_hud_active = false;
         app_state.kitty_payload_bytes = 0;
         app_state.kitty_base64_bytes = 0;
         app_state.kitty_chunks = 0;
@@ -261,17 +257,7 @@ pub fn render_frame(
         }
     }
 
-    let draw_terminal_hud = app_state.show_hud && {
-        #[cfg(feature = "metal")]
-        {
-            app_state.render_mode != RenderMode::Kitty || !app_state.kitty_pixel_hud_active
-        }
-        #[cfg(not(feature = "metal"))]
-        {
-            true
-        }
-    };
-    if draw_terminal_hud {
+    if app_state.show_hud {
         super::hud::draw_hud(app_state, cols, rows, ss, stdout)?;
     }
 
