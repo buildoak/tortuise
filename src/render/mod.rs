@@ -228,6 +228,30 @@ impl Backend {
     }
 }
 
+#[cfg(feature = "metal")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetalLodMode {
+    Off,
+    Fixed,
+}
+
+#[cfg(feature = "metal")]
+impl MetalLodMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn mapping_name(self) -> &'static str {
+        match self {
+            Self::Off => "identity",
+            Self::Fixed => "floor_even",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub camera: Camera,
@@ -252,6 +276,12 @@ pub struct AppState {
     pub render_mode: RenderMode,
     pub backend: Backend,
     pub use_truecolor: bool,
+    #[cfg(feature = "metal")]
+    pub metal_lod_mode: MetalLodMode,
+    #[cfg(feature = "metal")]
+    pub metal_lod_requested_splat_count: Option<usize>,
+    #[cfg(feature = "metal")]
+    pub metal_active_splat_count: usize,
     #[cfg(feature = "metal")]
     pub kitty_image_id: u32,
     #[cfg(feature = "metal")]

@@ -6,7 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use crossterm::{cursor, queue};
 
 #[cfg(feature = "metal")]
-use super::{AppState, Backend};
+use super::{AppState, Backend, MetalLodMode};
 
 pub const KITTY_DIRECT_CHUNK_SIZE: usize = 4096;
 
@@ -375,7 +375,11 @@ pub fn delete_kitty_image(stdout: &mut impl Write, image_id: u32) -> io::Result<
 }
 
 fn next_kitty_image_id(image_id: u32) -> u32 {
-    if image_id == 1 { 2 } else { 1 }
+    if image_id == 1 {
+        2
+    } else {
+        1
+    }
 }
 
 #[cfg_attr(not(feature = "metal"), allow(dead_code))]
@@ -405,7 +409,15 @@ fn render_metal_framebuffer(
     height: usize,
 ) -> Result<(), crate::render::metal::MetalRenderError> {
     match app_state.metal_backend.as_mut() {
-        Some(mb) => mb.render(&app_state.camera, width, height, app_state.splats.len()),
+        Some(mb) => mb.render(
+            &app_state.camera,
+            width,
+            height,
+            app_state.metal_active_splat_count,
+            app_state.splats.len(),
+            app_state.metal_lod_mode,
+            app_state.metal_lod_requested_splat_count,
+        ),
         None => Err(crate::render::metal::MetalRenderError::GpuDisabled),
     }
 }
@@ -454,6 +466,11 @@ pub fn render_kitty_frame(
 
     if let Err(err) = render_metal_framebuffer(app_state, width, height) {
         record_kitty_gpu_error(app_state, &err);
+        if app_state.metal_lod_mode == MetalLodMode::Fixed && err.should_disable_gpu() {
+            return Err(io::Error::other(format!(
+                "Metal fixed LoD render failed before CPU fallback: {err}"
+            )));
+        }
         return super::frame_halfblock::render_halfblock_frame(
             app_state, term_cols, term_rows, stdout,
         );
@@ -499,7 +516,7 @@ pub fn render_kitty_frame(
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
     app_state.kitty_write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
-    app_state.visible_splat_count = app_state.splats.len();
+    app_state.visible_splat_count = app_state.metal_active_splat_count;
     Ok(())
 }
 
@@ -549,7 +566,10 @@ mod tests {
     fn kitty_delete_image_uses_id_specific_quiet_delete() {
         let mut out = Vec::new();
         delete_kitty_image(&mut out, 7).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), "\x1b_Ga=d,d=i,i=7,q=2\x1b\\");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "\x1b_Ga=d,d=i,i=7,q=2\x1b\\"
+        );
     }
 
     #[test]

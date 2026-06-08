@@ -319,7 +319,15 @@ fn gpu_render_to_framebuffer(app_state: &mut AppState, width: usize, height: usi
 
     let render_result: Result<(), crate::render::metal::MetalRenderError> =
         match app_state.metal_backend.as_mut() {
-            Some(mb) => mb.render(&app_state.camera, width, height, app_state.splats.len()),
+            Some(mb) => mb.render(
+                &app_state.camera,
+                width,
+                height,
+                app_state.metal_active_splat_count,
+                app_state.splats.len(),
+                app_state.metal_lod_mode,
+                app_state.metal_lod_requested_splat_count,
+            ),
             None => return false,
         };
 
@@ -358,7 +366,7 @@ fn gpu_render_to_framebuffer(app_state: &mut AppState, width: usize, height: usi
         eprintln!("Metal halfblock downsample failed; falling back to CPU downsample: {err}");
     }
 
-    app_state.visible_splat_count = app_state.splats.len();
+    app_state.visible_splat_count = app_state.metal_active_splat_count;
     true
 }
 

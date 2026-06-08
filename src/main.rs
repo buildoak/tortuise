@@ -189,6 +189,21 @@ struct Cli {
         help = "Fast-preview per-tile raster budget; higher values reduce clipping artifacts at higher cost"
     )]
     metal_fast_tile_budget: Option<usize>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "off|fixed",
+        default_value = "off",
+        help = "Metal live LoD mode; fixed renders a deterministic active subset while keeping the full scene uploaded"
+    )]
+    metal_lod: String,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Active splat count for --metal-lod fixed"
+    )]
+    metal_lod_splat_count: Option<usize>,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -308,6 +323,66 @@ fn apply_splat_budget(splats: &mut Vec<splat::Splat>, budget: Option<usize>) -> 
     }
     *splats = selected;
     Ok(())
+}
+
+#[cfg(feature = "metal")]
+fn parse_metal_lod_mode(raw: &str) -> AppResult<render::MetalLodMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "" => Ok(render::MetalLodMode::Off),
+        "fixed" => Ok(render::MetalLodMode::Fixed),
+        _ => Err(format!("Invalid --metal-lod '{raw}'. Expected off or fixed").into()),
+    }
+}
+
+#[cfg(feature = "metal")]
+fn normalized_metal_quality(cli: &Cli) -> &'static str {
+    match cli.metal_quality.as_deref() {
+        Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "fast-preview" | "fast_preview" | "preview" | "fast" => "fast-preview",
+            "turbo" => "turbo",
+            _ => "exact",
+        },
+        None => "exact",
+    }
+}
+
+#[cfg(feature = "metal")]
+fn validate_metal_lod_cli(cli: &Cli) -> AppResult<render::MetalLodMode> {
+    let mode = parse_metal_lod_mode(&cli.metal_lod)?;
+    match mode {
+        render::MetalLodMode::Off => {
+            if let Some(value) = cli.metal_lod_splat_count {
+                if value == 0 {
+                    return Err("--metal-lod-splat-count must be greater than 0".into());
+                }
+            }
+        }
+        render::MetalLodMode::Fixed => {
+            let Some(value) = cli.metal_lod_splat_count else {
+                return Err("--metal-lod fixed requires --metal-lod-splat-count".into());
+            };
+            if value == 0 {
+                return Err("--metal-lod-splat-count must be greater than 0".into());
+            }
+            if cli.cpu {
+                return Err("--metal-lod fixed requires Metal; remove --cpu".into());
+            }
+            if cli.splat_budget.is_some() {
+                return Err(
+                    "--metal-lod fixed keeps the full scene uploaded; remove --splat-budget".into(),
+                );
+            }
+            match normalized_metal_quality(cli) {
+                "fast-preview" | "turbo" => {}
+                _ => {
+                    return Err(
+                        "--metal-lod fixed requires --metal-quality fast-preview or turbo".into(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(mode)
 }
 
 fn initial_live_camera(cli: &Cli) -> AppResult<(Camera, Vec3)> {
@@ -446,6 +521,11 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     config.inspect_scale = cli.probe_inspect_scale;
     config.stage_telemetry = cli.probe_stage_telemetry;
     config.timing = cli.probe_timing || cli.probe_benchmark_frames.is_some();
+    #[cfg(feature = "metal")]
+    {
+        config.metal_lod_mode = validate_metal_lod_cli(cli)?;
+        config.metal_lod_requested_splat_count = cli.metal_lod_splat_count;
+    }
 
     let result = render::probe::run_probe(&config, &loaded_splats)?;
     let mismatch_count = result
@@ -508,6 +588,7 @@ fn apply_metal_quality_override(cli: &Cli) -> AppResult<()> {
         }
         std::env::set_var("TORTUISE_METAL_FAST_TILE_BUDGET", value.to_string());
     }
+    validate_metal_lod_cli(cli)?;
     Ok(())
 }
 
@@ -627,6 +708,8 @@ fn main() -> AppResult<()> {
     apply_metal_quality_override(&cli)?;
     #[cfg(feature = "metal")]
     apply_kitty_transport_overrides(&cli)?;
+    #[cfg(feature = "metal")]
+    let metal_lod_mode = validate_metal_lod_cli(&cli)?;
 
     #[cfg(feature = "metal")]
     let mut backend = if cli.cpu {
@@ -638,6 +721,15 @@ fn main() -> AppResult<()> {
     let backend = Backend::Cpu;
 
     let mut splats = load_splats_from_cli(&cli)?;
+    #[cfg(feature = "metal")]
+    let metal_lod_requested_splat_count = cli.metal_lod_splat_count;
+    #[cfg(feature = "metal")]
+    let metal_active_splat_count = match metal_lod_mode {
+        render::MetalLodMode::Off => splats.len(),
+        render::MetalLodMode::Fixed => metal_lod_requested_splat_count
+            .unwrap_or(splats.len())
+            .min(splats.len()),
+    };
     if cli.flip_y || cli.flip_z {
         for splat in &mut splats {
             if cli.flip_y {
@@ -735,6 +827,12 @@ fn main() -> AppResult<()> {
         },
         backend,
         use_truecolor,
+        #[cfg(feature = "metal")]
+        metal_lod_mode,
+        #[cfg(feature = "metal")]
+        metal_lod_requested_splat_count,
+        #[cfg(feature = "metal")]
+        metal_active_splat_count,
         #[cfg(feature = "metal")]
         kitty_image_id: 1,
         #[cfg(feature = "metal")]
@@ -866,6 +964,69 @@ mod tests {
         cli.metal_fast_tile_budget = Some(0);
         let err = apply_metal_quality_override(&cli).unwrap_err();
         assert!(err.to_string().contains("--metal-fast-tile-budget"));
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_lod_fixed_requires_fast_quality_and_count() {
+        let cli = Cli::parse_from(["tortuise", "--metal-lod", "fixed"]);
+        let err = validate_metal_lod_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--metal-lod-splat-count"));
+
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--metal-lod",
+            "fixed",
+            "--metal-lod-splat-count",
+            "1500000",
+        ]);
+        let err = validate_metal_lod_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--metal-quality fast-preview"));
+
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--metal-quality",
+            "fast-preview",
+            "--metal-lod",
+            "fixed",
+            "--metal-lod-splat-count",
+            "1500000",
+        ]);
+        assert_eq!(
+            validate_metal_lod_cli(&cli).unwrap(),
+            render::MetalLodMode::Fixed
+        );
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_lod_fixed_rejects_preupload_budget_and_cpu() {
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--metal-quality",
+            "fast-preview",
+            "--metal-lod",
+            "fixed",
+            "--metal-lod-splat-count",
+            "1500000",
+            "--splat-budget",
+            "1500000",
+        ]);
+        let err = validate_metal_lod_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--splat-budget"));
+
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--cpu",
+            "--metal-quality",
+            "fast-preview",
+            "--metal-lod",
+            "fixed",
+            "--metal-lod-splat-count",
+            "1500000",
+        ]);
+        let err = validate_metal_lod_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--cpu"));
     }
 
     #[cfg(feature = "metal")]

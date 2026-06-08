@@ -207,6 +207,12 @@ mod tests {
             backend: Backend::Cpu,
             use_truecolor: false,
             #[cfg(feature = "metal")]
+            metal_lod_mode: crate::render::MetalLodMode::Off,
+            #[cfg(feature = "metal")]
+            metal_lod_requested_splat_count: None,
+            #[cfg(feature = "metal")]
+            metal_active_splat_count: 0,
+            #[cfg(feature = "metal")]
             kitty_image_id: 1,
             #[cfg(feature = "metal")]
             kitty_visible_image_id: 0,

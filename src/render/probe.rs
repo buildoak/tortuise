@@ -239,6 +239,10 @@ pub struct ProbeConfig {
     pub kitty_artifacts: bool,
     pub stage_telemetry: bool,
     pub timing: bool,
+    #[cfg(feature = "metal")]
+    pub metal_lod_mode: super::MetalLodMode,
+    #[cfg(feature = "metal")]
+    pub metal_lod_requested_splat_count: Option<usize>,
 }
 
 impl ProbeConfig {
@@ -257,6 +261,10 @@ impl ProbeConfig {
             kitty_artifacts: false,
             stage_telemetry: false,
             timing: false,
+            #[cfg(feature = "metal")]
+            metal_lod_mode: super::MetalLodMode::Off,
+            #[cfg(feature = "metal")]
+            metal_lod_requested_splat_count: None,
         }
     }
 }
@@ -414,6 +422,12 @@ pub struct ProbeProjectedSplatTelemetry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeMetalStageTelemetry {
+    pub lod_mode: &'static str,
+    pub lod_mapping: &'static str,
+    pub lod_requested_splat_count: Option<usize>,
+    pub source_splat_count: usize,
+    pub active_splat_count: usize,
+    pub overlap_history_reset: bool,
     pub tile_count_x: u32,
     pub tile_count_y: u32,
     pub num_tiles: usize,
@@ -824,6 +838,14 @@ fn render_metal_probe_frames(
     backend.set_probe_stage_telemetry_enabled(config.stage_telemetry);
     backend.set_probe_stage_timing_enabled(config.stage_telemetry || config.timing);
     backend.upload_splats(splats)?;
+    let source_splat_count = splats.len();
+    let active_splat_count = match config.metal_lod_mode {
+        super::MetalLodMode::Off => source_splat_count,
+        super::MetalLodMode::Fixed => config
+            .metal_lod_requested_splat_count
+            .unwrap_or(source_splat_count)
+            .min(source_splat_count),
+    };
     let mut timing = ProbeBackendTiming {
         frames: config.frames,
         warmup_frames: config.warmup_frames,
@@ -831,7 +853,15 @@ fn render_metal_probe_frames(
     };
     for _ in 0..config.warmup_frames {
         let started = Instant::now();
-        backend.render(camera, config.width, config.height, splats.len())?;
+        backend.render(
+            camera,
+            config.width,
+            config.height,
+            active_splat_count,
+            source_splat_count,
+            config.metal_lod_mode,
+            config.metal_lod_requested_splat_count,
+        )?;
         let _ = backend.framebuffer_slice();
         timing.warmup_ms += duration_ms(started.elapsed());
     }
@@ -840,7 +870,15 @@ fn render_metal_probe_frames(
     let mut framebuffers = Vec::with_capacity(config.frames);
     for frame_idx in 0..config.frames {
         let render_started = Instant::now();
-        backend.render(camera, config.width, config.height, splats.len())?;
+        backend.render(
+            camera,
+            config.width,
+            config.height,
+            active_splat_count,
+            source_splat_count,
+            config.metal_lod_mode,
+            config.metal_lod_requested_splat_count,
+        )?;
         timing.render_ms += duration_ms(render_started.elapsed());
         let readback_started = Instant::now();
         let packed = backend.framebuffer_slice();
@@ -984,6 +1022,12 @@ fn render_cpu_frame_with_projection(
 impl From<super::metal::MetalProbeTelemetry> for ProbeMetalStageTelemetry {
     fn from(value: super::metal::MetalProbeTelemetry) -> Self {
         Self {
+            lod_mode: value.lod_mode,
+            lod_mapping: value.lod_mapping,
+            lod_requested_splat_count: value.lod_requested_splat_count,
+            source_splat_count: value.source_splat_count,
+            active_splat_count: value.active_splat_count,
+            overlap_history_reset: value.overlap_history_reset,
             tile_count_x: value.tile_count_x,
             tile_count_y: value.tile_count_y,
             num_tiles: value.num_tiles,
@@ -2124,6 +2168,12 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
     format!(
         concat!(
             "{{",
+            "\"lod_mode\":\"{}\",",
+            "\"lod_mapping\":\"{}\",",
+            "\"lod_requested_splat_count\":{},",
+            "\"source_splat_count\":{},",
+            "\"active_splat_count\":{},",
+            "\"overlap_history_reset\":{},",
             "\"tile_count_x\":{},",
             "\"tile_count_y\":{},",
             "\"num_tiles\":{},",
@@ -2142,6 +2192,12 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
             "\"stage_timings\":{}",
             "}}"
         ),
+        telemetry.lod_mode,
+        telemetry.lod_mapping,
+        option_usize_json(telemetry.lod_requested_splat_count),
+        telemetry.source_splat_count,
+        telemetry.active_splat_count,
+        telemetry.overlap_history_reset,
         telemetry.tile_count_x,
         telemetry.tile_count_y,
         telemetry.num_tiles,
@@ -2159,6 +2215,12 @@ fn metal_stage_telemetry_json(telemetry: &ProbeMetalStageTelemetry) -> String {
         metal_tile_density_telemetry_json(&telemetry.tile_density),
         stage_timings
     )
+}
+
+fn option_usize_json(value: Option<usize>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn metal_stage_timings_json(timings: &[ProbeMetalStageTiming]) -> String {
@@ -2951,6 +3013,12 @@ mod tests {
     #[test]
     fn probe_metal_stage_timing_json_is_structured() {
         let telemetry = ProbeMetalStageTelemetry {
+            lod_mode: "fixed",
+            lod_mapping: "floor_even",
+            lod_requested_splat_count: Some(12),
+            source_splat_count: 20,
+            active_splat_count: 12,
+            overlap_history_reset: true,
             tile_count_x: 2,
             tile_count_y: 3,
             num_tiles: 6,
@@ -2977,6 +3045,9 @@ mod tests {
 
         assert!(json.contains("\"stage_timings\""));
         assert!(json.contains("\"stage\":\"fused_render_attempt\""));
+        assert!(json.contains("\"lod_mode\":\"fixed\""));
+        assert!(json.contains("\"source_splat_count\":20"));
+        assert!(json.contains("\"active_splat_count\":12"));
         assert!(json.contains("\"ok\":true"));
         assert!(json.contains("\"encode_ms\":1.250000"));
         assert!(json.contains("\"wait_ms\":2.500000"));

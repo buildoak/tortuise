@@ -6,6 +6,7 @@ use super::render_attempt::run_single_render_attempt;
 use super::sort::div_ceil_u32;
 use super::types::TILE_SIZE;
 use super::MetalBackend;
+use crate::render::MetalLodMode;
 
 const MAX_SORT_KEY_ORIGINAL_INDEX: usize = (1 << 22) - 1;
 const MAX_SORT_KEY_TILE_COUNT: u64 = (1 << 16) - 1;
@@ -67,7 +68,10 @@ impl MetalBackend {
         camera: &Camera,
         screen_width: usize,
         screen_height: usize,
-        splat_count: usize,
+        active_splat_count: usize,
+        source_splat_count: usize,
+        lod_mode: MetalLodMode,
+        lod_requested_splat_count: Option<usize>,
     ) -> Result<(), MetalRenderError> {
         autoreleasepool(|| {
             if self.gpu_disabled {
@@ -84,10 +88,13 @@ impl MetalBackend {
                 return Ok(());
             }
 
-            if splat_count > self.max_splats {
+            if source_splat_count > self.max_splats {
                 return Err("Too many splats for GPU buffers".into());
             }
-            if splat_count > MAX_SORT_KEY_ORIGINAL_INDEX + 1 {
+            if active_splat_count > source_splat_count {
+                return Err("Metal active splat count exceeds source splat count".into());
+            }
+            if source_splat_count > MAX_SORT_KEY_ORIGINAL_INDEX + 1 {
                 return Err(
                     "Splat count exceeds 22-bit Metal sort key original_index encoding".into(),
                 );
@@ -104,6 +111,14 @@ impl MetalBackend {
             }
             let num_tiles = usize::try_from(num_tiles_u64)?;
             let previous_num_tiles = self.last_num_tiles;
+            let overlap_history_reset = self.previous_source_splat_count != source_splat_count
+                || self.previous_active_splat_count != active_splat_count;
+            if overlap_history_reset {
+                self.previous_total_overlaps = 0;
+                self.frames_below_threshold = 0;
+            }
+            self.previous_source_splat_count = source_splat_count;
+            self.previous_active_splat_count = active_splat_count;
 
             self.last_tile_count_x = tile_count_x;
             self.last_tile_count_y = tile_count_y;
@@ -118,10 +133,16 @@ impl MetalBackend {
             self.last_retry_count = 0;
             self.last_overflow_flag = 0;
             self.last_tile_density = Default::default();
+            self.last_lod_mode = lod_mode.name();
+            self.last_lod_mapping = lod_mode.mapping_name();
+            self.last_lod_requested_splat_count = lod_requested_splat_count;
+            self.last_source_splat_count = source_splat_count;
+            self.last_active_splat_count = active_splat_count;
+            self.last_overlap_history_reset = overlap_history_reset;
             self.clear_stage_timings();
 
             self.ensure_framebuffer_capacity(screen_width, screen_height)?;
-            if splat_count == 0 {
+            if active_splat_count == 0 {
                 self.clear_framebuffer(screen_width, screen_height);
                 self.last_render_width = screen_width;
                 self.last_render_height = screen_height;
@@ -131,7 +152,7 @@ impl MetalBackend {
             self.ensure_tile_capacity(num_tiles)?;
 
             let mut estimated_overlaps = estimate_overlaps_for_attempt(
-                splat_count,
+                active_splat_count,
                 self.previous_total_overlaps,
                 previous_num_tiles,
                 num_tiles,
@@ -150,7 +171,8 @@ impl MetalBackend {
                     camera,
                     screen_width,
                     screen_height,
-                    splat_count,
+                    active_splat_count,
+                    source_splat_count,
                     attempt_sort_count,
                 )?;
 

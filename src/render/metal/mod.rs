@@ -42,6 +42,12 @@ const MAX_METAL_STAGE_TIMINGS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetalProbeTelemetry {
+    pub lod_mode: &'static str,
+    pub lod_mapping: &'static str,
+    pub lod_requested_splat_count: Option<usize>,
+    pub source_splat_count: usize,
+    pub active_splat_count: usize,
+    pub overlap_history_reset: bool,
     pub tile_count_x: u32,
     pub tile_count_y: u32,
     pub num_tiles: usize,
@@ -109,6 +115,8 @@ pub struct MetalBackend {
 
     pub(super) splats_uploaded: bool,
     pub(super) previous_total_overlaps: u32,
+    pub(super) previous_source_splat_count: usize,
+    pub(super) previous_active_splat_count: usize,
     pub(super) overflow_flag_buffer: Buffer,
     pub(super) last_render_width: usize,
     pub(super) last_render_height: usize,
@@ -128,6 +136,12 @@ pub struct MetalBackend {
     pub(super) last_retry_count: u32,
     pub(super) last_overflow_flag: u32,
     pub(super) last_tile_density: MetalTileDensityTelemetry,
+    pub(super) last_lod_mode: &'static str,
+    pub(super) last_lod_mapping: &'static str,
+    pub(super) last_lod_requested_splat_count: Option<usize>,
+    pub(super) last_source_splat_count: usize,
+    pub(super) last_active_splat_count: usize,
+    pub(super) last_overlap_history_reset: bool,
     pub(super) probe_stage_telemetry_enabled: bool,
     pub(super) probe_stage_timing_enabled: bool,
     pub(super) last_stage_timings: [MetalStageTimingTelemetry; MAX_METAL_STAGE_TIMINGS],
@@ -155,6 +169,12 @@ impl std::fmt::Debug for MetalBackend {
 impl MetalBackend {
     pub fn probe_telemetry(&self) -> MetalProbeTelemetry {
         MetalProbeTelemetry {
+            lod_mode: self.last_lod_mode,
+            lod_mapping: self.last_lod_mapping,
+            lod_requested_splat_count: self.last_lod_requested_splat_count,
+            source_splat_count: self.last_source_splat_count,
+            active_splat_count: self.last_active_splat_count,
+            overlap_history_reset: self.last_overlap_history_reset,
             tile_count_x: self.last_tile_count_x,
             tile_count_y: self.last_tile_count_y,
             num_tiles: self.last_num_tiles,

@@ -77,7 +77,8 @@ pub(super) fn run_single_render_attempt(
     camera: &Camera,
     screen_width: usize,
     screen_height: usize,
-    splat_count: usize,
+    active_splat_count: usize,
+    source_splat_count: usize,
     attempt_sort_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let sort_path = metal_sort_path();
@@ -88,7 +89,8 @@ pub(super) fn run_single_render_attempt(
             camera,
             screen_width,
             screen_height,
-            splat_count,
+            active_splat_count,
+            source_splat_count,
         )
     } else {
         run_single_render_attempt_fused(
@@ -96,7 +98,8 @@ pub(super) fn run_single_render_attempt(
             camera,
             screen_width,
             screen_height,
-            splat_count,
+            active_splat_count,
+            source_splat_count,
             attempt_sort_count,
             sort_path,
         )
@@ -108,7 +111,8 @@ fn run_single_render_attempt_fused(
     camera: &Camera,
     screen_width: usize,
     screen_height: usize,
-    splat_count: usize,
+    active_splat_count: usize,
+    source_splat_count: usize,
     attempt_sort_count: usize,
     sort_path: MetalSortPath,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
@@ -170,7 +174,8 @@ fn run_single_render_attempt_fused(
     let tile_offsets_bytes = super::buffers::bytes_for_u32_elems(num_tiles + 1)? as u64;
     let sort_key_bytes = super::buffers::bytes_for_u64_elems(attempt_sort_count)? as u64;
     let sort_value_bytes = super::buffers::bytes_for_u32_elems(attempt_sort_count)? as u64;
-    let splat_count_u32 = u32::try_from(splat_count)?;
+    let active_splat_count_u32 = u32::try_from(active_splat_count)?;
+    let source_splat_count_u32 = u32::try_from(source_splat_count)?;
     let framebuffer_pixels = screen_width
         .checked_mul(screen_height)
         .ok_or_else(|| MetalRenderError::Other("framebuffer pixel count overflow".to_string()))?;
@@ -231,13 +236,14 @@ fn run_single_render_attempt_fused(
     encoder.set_bytes(
         4,
         mem::size_of::<u32>() as u64,
-        &splat_count_u32 as *const _ as *const c_void,
+        &active_splat_count_u32 as *const _ as *const c_void,
     );
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
     set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
     set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
     set_bytes_f32(encoder, 8, fast_alpha_cutoff);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    set_bytes_u32(encoder, 9, source_splat_count_u32);
+    dispatch_1d(encoder, active_splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
     let encoder = command_buffer.new_compute_command_encoder();
@@ -403,6 +409,12 @@ fn run_single_render_attempt_fused(
                 "\"encode_ms\":{:.6},",
                 "\"wait_ms\":{:.6},",
                 "\"splat_count\":{},",
+                "\"source_splat_count\":{},",
+                "\"active_splat_count\":{},",
+                "\"lod_mode\":\"{}\",",
+                "\"lod_mapping\":\"{}\",",
+                "\"lod_requested_splat_count\":{},",
+                "\"overlap_history_reset\":{},",
                 "\"attempt_sort_count\":{},",
                 "\"sort_capacity\":{},",
                 "\"sort_num_blocks\":{},",
@@ -418,7 +430,13 @@ fn run_single_render_attempt_fused(
             stage_result.is_ok(),
             encode_ms,
             wait_ms,
-            splat_count,
+            active_splat_count,
+            source_splat_count,
+            active_splat_count,
+            backend.last_lod_mode,
+            backend.last_lod_mapping,
+            option_usize_json(backend.last_lod_requested_splat_count),
+            backend.last_overlap_history_reset,
             attempt_sort_count_u32,
             backend.sort_capacity,
             sort_num_blocks,
@@ -455,7 +473,8 @@ fn run_single_render_attempt_two_stage(
     camera: &Camera,
     screen_width: usize,
     screen_height: usize,
-    splat_count: usize,
+    active_splat_count: usize,
+    source_splat_count: usize,
 ) -> Result<RenderAttemptResult, MetalRenderError> {
     let stage_timing_enabled = metal_stage_timing_enabled();
     let capture_stage_timing = stage_timing_enabled || backend.probe_stage_timing_enabled;
@@ -513,7 +532,8 @@ fn run_single_render_attempt_two_stage(
 
     let tile_bytes = super::buffers::bytes_for_u32_elems(num_tiles)? as u64;
     let tile_offsets_bytes = super::buffers::bytes_for_u32_elems(num_tiles + 1)? as u64;
-    let splat_count_u32 = u32::try_from(splat_count)?;
+    let active_splat_count_u32 = u32::try_from(active_splat_count)?;
+    let source_splat_count_u32 = u32::try_from(source_splat_count)?;
     let framebuffer_pixels = screen_width
         .checked_mul(screen_height)
         .ok_or_else(|| MetalRenderError::Other("framebuffer pixel count overflow".to_string()))?;
@@ -558,13 +578,14 @@ fn run_single_render_attempt_two_stage(
     encoder.set_bytes(
         4,
         mem::size_of::<u32>() as u64,
-        &splat_count_u32 as *const _ as *const c_void,
+        &active_splat_count_u32 as *const _ as *const c_void,
     );
     encoder.set_buffer(5, Some(&backend.tile_config_buffer), 0);
     set_bytes_u32(encoder, 6, u32::from(snug_tile_bounds_enabled));
     set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
     set_bytes_f32(encoder, 8, fast_alpha_cutoff);
-    dispatch_1d(encoder, splat_count_u32, THREADS_PER_GROUP_1D);
+    set_bytes_u32(encoder, 9, source_splat_count_u32);
+    dispatch_1d(encoder, active_splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
     let encoder = stage_a.new_compute_command_encoder();
@@ -650,6 +671,12 @@ fn run_single_render_attempt_two_stage(
                 "\"encode_ms\":{:.6},",
                 "\"wait_ms\":{:.6},",
                 "\"splat_count\":{},",
+                "\"source_splat_count\":{},",
+                "\"active_splat_count\":{},",
+                "\"lod_mode\":\"{}\",",
+                "\"lod_mapping\":\"{}\",",
+                "\"lod_requested_splat_count\":{},",
+                "\"overlap_history_reset\":{},",
                 "\"num_tiles\":{},",
                 "\"tile_count_x\":{},",
                 "\"tile_count_y\":{},",
@@ -662,7 +689,13 @@ fn run_single_render_attempt_two_stage(
             stage_a_result.is_ok(),
             stage_a_encode_ms,
             stage_a_wait_ms,
-            splat_count,
+            active_splat_count,
+            source_splat_count,
+            active_splat_count,
+            backend.last_lod_mode,
+            backend.last_lod_mapping,
+            option_usize_json(backend.last_lod_requested_splat_count),
+            backend.last_overlap_history_reset,
             num_tiles,
             tile_count_x,
             tile_count_y,
@@ -821,6 +854,12 @@ fn run_single_render_attempt_two_stage(
                 "\"encode_ms\":{:.6},",
                 "\"wait_ms\":{:.6},",
                 "\"splat_count\":{},",
+                "\"source_splat_count\":{},",
+                "\"active_splat_count\":{},",
+                "\"lod_mode\":\"{}\",",
+                "\"lod_mapping\":\"{}\",",
+                "\"lod_requested_splat_count\":{},",
+                "\"overlap_history_reset\":{},",
                 "\"dispatch_overlaps\":{},",
                 "\"sort_capacity\":{},",
                 "\"sort_num_blocks\":{},",
@@ -848,7 +887,13 @@ fn run_single_render_attempt_two_stage(
             stage_b_result.is_ok(),
             stage_b_encode_ms,
             stage_b_wait_ms,
-            splat_count,
+            active_splat_count,
+            source_splat_count,
+            active_splat_count,
+            backend.last_lod_mode,
+            backend.last_lod_mapping,
+            option_usize_json(backend.last_lod_requested_splat_count),
+            backend.last_overlap_history_reset,
             dispatch_overlaps,
             sort_capacity_u32,
             sort_num_blocks,
@@ -981,6 +1026,12 @@ fn set_bytes_f32(encoder: &metal::ComputeCommandEncoderRef, index: u64, value: f
         mem::size_of::<f32>() as u64,
         &value as *const _ as *const c_void,
     );
+}
+
+fn option_usize_json(value: Option<usize>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn approximate_radix_bit_offsets(num_tiles: usize, depth_bits: u32) -> Vec<u32> {

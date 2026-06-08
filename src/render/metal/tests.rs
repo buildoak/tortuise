@@ -13,7 +13,7 @@ use crate::{
     math::Vec3,
     render::{
         modes::halfblock::downsample_packed_to_terminal_into, pipeline, rasterizer, HalfblockCell,
-        RenderState,
+        MetalLodMode, RenderState,
     },
     sort::sort_by_depth,
     splat::Splat,
@@ -186,7 +186,15 @@ fn test_halfblock_downsample_matches_cpu_oracle_after_render() {
         .upload_splats(&splats)
         .expect("upload_splats should succeed");
     backend
-        .render(&camera, width, height, splats.len())
+        .render(
+            &camera,
+            width,
+            height,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("render should succeed");
     backend
         .downsample_halfblock_cells(width, height, term_cols, term_rows, ss)
@@ -441,7 +449,7 @@ fn test_render_empty_scene() {
         .expect("upload_splats should accept empty slice");
 
     backend
-        .render(&camera, 64, 64, 0)
+        .render(&camera, 64, 64, 0, 0, MetalLodMode::Off, None)
         .expect("render should succeed for empty scene");
     let framebuffer = backend.framebuffer_slice().to_vec();
     assert!(framebuffer.is_empty() || framebuffer.iter().all(|&p| p == 0));
@@ -465,7 +473,15 @@ fn test_render_matches_cpu() {
         .expect("upload_splats should succeed");
 
     backend
-        .render(&camera, width, height, splats.len())
+        .render(
+            &camera,
+            width,
+            height,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("GPU render should succeed");
     let gpu_packed = backend.framebuffer_slice().to_vec();
     let gpu_rgb = unpack_rgb(&gpu_packed);
@@ -503,15 +519,39 @@ fn test_resize_handling() {
         .expect("upload_splats should succeed");
 
     backend
-        .render(&camera, 64, 64, splats.len())
+        .render(
+            &camera,
+            64,
+            64,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("64x64 render should succeed");
     let fb_64_a = backend.framebuffer_slice().to_vec();
     backend
-        .render(&camera, 256, 256, splats.len())
+        .render(
+            &camera,
+            256,
+            256,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("256x256 render should succeed");
     let fb_256 = backend.framebuffer_slice().to_vec();
     backend
-        .render(&camera, 64, 64, splats.len())
+        .render(
+            &camera,
+            64,
+            64,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("second 64x64 render should succeed");
     let fb_64_b = backend.framebuffer_slice().to_vec();
 
@@ -535,7 +575,15 @@ fn test_high_tile_count_render_exceeds_legacy_ten_bit_tile_limit() {
         .expect("upload_splats should succeed");
 
     backend
-        .render(&camera, 513, 513, splats.len())
+        .render(
+            &camera,
+            513,
+            513,
+            splats.len(),
+            splats.len(),
+            MetalLodMode::Off,
+            None,
+        )
         .expect("high-tile render should exceed the old 1023-tile limit without failing");
 
     assert_eq!(backend.framebuffer_slice().len(), 513 * 513);

@@ -206,18 +206,21 @@ kernel void project_splats(
     device ProjectedSplat* projected_splats [[buffer(1)]],
     device atomic_uint* valid_count [[buffer(2)]],
     constant CameraData& camera [[buffer(3)]],
-    constant uint& splat_count [[buffer(4)]],
+    constant uint& active_splat_count [[buffer(4)]],
     constant TileConfig& tile_config [[buffer(5)]],
     constant uint& use_snug_tile_bounds [[buffer(6)]],
     constant uint& fast_quality [[buffer(7)]],
     constant float& fast_alpha_cutoff [[buffer(8)]],
+    constant uint& source_splat_count [[buffer(9)]],
     uint index [[thread_position_in_grid]]
 ) {
-    if (index >= splat_count) {
+    if (index >= active_splat_count || source_splat_count == 0u || active_splat_count == 0u) {
         return;
     }
 
-    SplatData splat = splats[index];
+    const ulong mapped = (ulong(index) * ulong(source_splat_count)) / ulong(active_splat_count);
+    const uint source_index = uint(min(mapped, ulong(source_splat_count - 1u)));
+    SplatData splat = splats[source_index];
 
     // World to view transformation
     float3 rel = float3(splat.pos_x, splat.pos_y, splat.pos_z) -
@@ -310,7 +313,7 @@ kernel void project_splats(
         cov_2d.x, cov_2d.y, cov_2d.z,
         splat.opacity,
         splat.packed_color,
-        index,
+        source_index,
         packed_tile_min,
         packed_tile_max
     };
