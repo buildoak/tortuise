@@ -1,9 +1,13 @@
 use crossterm::event;
 use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum InputMessage {
-    Event(crossterm::event::Event),
+    Event {
+        event: crossterm::event::Event,
+        read_at: Instant,
+    },
     ReadError(String),
 }
 
@@ -14,7 +18,13 @@ pub fn spawn_input_thread() -> InputReceiver {
     std::thread::spawn(move || loop {
         match event::read() {
             Ok(ev) => {
-                if tx.send(InputMessage::Event(ev)).is_err() {
+                if tx
+                    .send(InputMessage::Event {
+                        event: ev,
+                        read_at: Instant::now(),
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }

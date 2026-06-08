@@ -2,6 +2,7 @@ pub mod frame;
 mod frame_halfblock;
 pub mod frame_kitty;
 pub mod hud;
+pub mod live_telemetry;
 #[cfg(feature = "metal")]
 pub mod lod;
 #[cfg(feature = "metal")]
@@ -221,6 +222,7 @@ pub enum Backend {
 }
 
 impl Backend {
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             Self::Cpu => "CPU",
@@ -280,12 +282,14 @@ pub struct AppState {
     pub last_frame_time: Instant,
     pub fps: f32,
     pub visible_splat_count: usize,
+    pub effective_render_path: &'static str,
     pub orbit_angle: f32,
     pub orbit_radius: f32,
     pub orbit_height: f32,
     pub orbit_target: Vec3,
     pub supersample_factor: u32,
     pub render_mode: RenderMode,
+    #[cfg_attr(not(feature = "metal"), allow(dead_code))]
     pub backend: Backend,
     pub use_truecolor: bool,
     #[cfg(feature = "metal")]
@@ -309,9 +313,16 @@ pub struct AppState {
     #[cfg(feature = "metal")]
     pub kitty_write_ms: f32,
     #[cfg(feature = "metal")]
+    pub kitty_convert_ms: f32,
+    #[cfg(feature = "metal")]
+    pub kitty_encode_ms: f32,
+    pub last_flush_ms: f32,
+    pub last_telemetry_write_ms: f32,
+    #[cfg(feature = "metal")]
     pub metal_backend: Option<crate::render::metal::MetalBackend>,
     #[cfg(feature = "metal")]
     pub last_gpu_error: Option<String>,
     #[cfg(feature = "metal")]
     pub gpu_fallback_active: bool,
+    pub live_telemetry: live_telemetry::LiveTelemetryState,
 }

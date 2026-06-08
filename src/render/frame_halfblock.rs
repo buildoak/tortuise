@@ -236,6 +236,7 @@ pub fn render_halfblock_frame(
     let gpu_rendered = false;
 
     if !gpu_rendered {
+        app_state.effective_render_path = "cpu_halfblock";
         super::pipeline::clear_framebuffer(&mut app_state.render_state);
         super::pipeline::cpu_project_and_sort(app_state, ss_width, ss_height);
         super::rasterizer::rasterize_splats(
@@ -244,6 +245,11 @@ pub fn render_halfblock_frame(
             ss_width,
             ss_height,
         );
+    }
+
+    #[cfg(feature = "metal")]
+    if gpu_rendered {
+        app_state.effective_render_path = "metal_halfblock";
     }
 
     #[cfg(feature = "metal")]
@@ -367,7 +373,10 @@ fn gpu_render_to_framebuffer(app_state: &mut AppState, width: usize, height: usi
         eprintln!("Metal halfblock downsample failed; falling back to CPU downsample: {err}");
     }
 
-    app_state.visible_splat_count = app_state.metal_active_splat_count;
+    if let Some(mb) = app_state.metal_backend.as_ref() {
+        let telemetry = mb.probe_telemetry();
+        app_state.visible_splat_count = telemetry.valid_count as usize;
+    }
     true
 }
 

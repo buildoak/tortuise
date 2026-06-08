@@ -69,6 +69,7 @@ mod tests {
             last_frame_time: Instant::now(),
             fps: 0.0,
             visible_splat_count: 0,
+            effective_render_path: "test",
             orbit_angle: 0.0,
             orbit_radius: 5.0,
             orbit_height: 0.0,
@@ -98,11 +99,18 @@ mod tests {
             #[cfg(feature = "metal")]
             kitty_write_ms: 0.0,
             #[cfg(feature = "metal")]
+            kitty_convert_ms: 0.0,
+            #[cfg(feature = "metal")]
+            kitty_encode_ms: 0.0,
+            last_flush_ms: 0.0,
+            last_telemetry_write_ms: 0.0,
+            #[cfg(feature = "metal")]
             metal_backend: None,
             #[cfg(feature = "metal")]
             last_gpu_error: None,
             #[cfg(feature = "metal")]
             gpu_fallback_active: false,
+            live_telemetry: crate::render::live_telemetry::LiveTelemetryState::disabled(),
         }
     }
 

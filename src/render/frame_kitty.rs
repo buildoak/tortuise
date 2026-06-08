@@ -75,6 +75,16 @@ pub struct KittyDownscaleBudget {
     pub rgb_chunks: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct KittyImageSpec {
+    image_id: u32,
+    width: usize,
+    height: usize,
+    term_cols: usize,
+    term_rows: usize,
+    format: KittyPayloadFormat,
+}
+
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn packed_framebuffer_to_rgba(packed: &[u32], out: &mut Vec<u8>) {
     out.clear();
@@ -332,15 +342,10 @@ pub fn kitty_replay_report_json(
     Ok(json)
 }
 
-#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
+#[cfg(test)]
 fn write_kitty_rgba_direct(
     stdout: &mut impl Write,
-    image_id: u32,
-    width: usize,
-    height: usize,
-    term_cols: usize,
-    term_rows: usize,
-    format: KittyPayloadFormat,
+    spec: KittyImageSpec,
     payload: &[u8],
 ) -> io::Result<(usize, usize)> {
     if payload.is_empty() {
@@ -349,7 +354,20 @@ fn write_kitty_rgba_direct(
 
     let encoded = BASE64_STANDARD.encode(payload);
     debug_assert_eq!(encoded.len(), kitty_base64_len(payload.len()));
-    let kitty_format = format.kitty_format();
+    write_kitty_encoded_direct(stdout, spec, &encoded)
+}
+
+#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
+fn write_kitty_encoded_direct(
+    stdout: &mut impl Write,
+    spec: KittyImageSpec,
+    encoded: &str,
+) -> io::Result<(usize, usize)> {
+    if encoded.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let kitty_format = spec.format.kitty_format();
     let mut chunks = 0usize;
     let mut offset = 0usize;
     while offset < encoded.len() {
@@ -359,7 +377,12 @@ fn write_kitty_rgba_direct(
         if offset == 0 {
             write!(
                 stdout,
-                "\x1b_Ga=T,f={kitty_format},t=d,s={width},v={height},c={term_cols},r={term_rows},i={image_id},q=2,C=1,m={more};{chunk}\x1b\\"
+                "\x1b_Ga=T,f={kitty_format},t=d,s={},v={},c={},r={},i={},q=2,C=1,m={more};{chunk}\x1b\\",
+                spec.width,
+                spec.height,
+                spec.term_cols,
+                spec.term_rows,
+                spec.image_id
             )?;
         } else {
             write!(stdout, "\x1b_Gq=2,m={more};{chunk}\x1b\\")?;
@@ -370,10 +393,12 @@ fn write_kitty_rgba_direct(
     Ok((encoded.len(), chunks))
 }
 
+#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 pub fn delete_kitty_image(stdout: &mut impl Write, image_id: u32) -> io::Result<()> {
     write!(stdout, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")
 }
 
+#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn next_kitty_image_id(image_id: u32) -> u32 {
     if image_id == 1 {
         2
@@ -433,6 +458,17 @@ fn record_kitty_gpu_error(app_state: &mut AppState, err: &crate::render::metal::
     }
 }
 
+#[cfg(feature = "metal")]
+fn clear_kitty_transport_stats(app_state: &mut AppState) {
+    app_state.kitty_payload_bytes = 0;
+    app_state.kitty_base64_bytes = 0;
+    app_state.kitty_chunks = 0;
+    app_state.kitty_convert_ms = 0.0;
+    app_state.kitty_encode_ms = 0.0;
+    app_state.kitty_write_ms = 0.0;
+}
+
+#[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn kitty_image_placement_rows(show_hud: bool, term_rows: usize) -> (usize, usize) {
     let reserved_hud_rows = if show_hud && term_rows > 2 { 2 } else { 0 };
     let image_term_rows = term_rows.saturating_sub(reserved_hud_rows).max(1);
@@ -448,6 +484,7 @@ pub fn render_kitty_frame(
     stdout: &mut impl Write,
 ) -> io::Result<()> {
     if app_state.backend != Backend::Metal || app_state.metal_backend.is_none() {
+        clear_kitty_transport_stats(app_state);
         return super::frame_halfblock::render_halfblock_frame(
             app_state, term_cols, term_rows, stdout,
         );
@@ -472,6 +509,7 @@ pub fn render_kitty_frame(
                 "Metal fixed LoD render failed before CPU fallback: {err}"
             )));
         }
+        clear_kitty_transport_stats(app_state);
         return super::frame_halfblock::render_halfblock_frame(
             app_state, term_cols, term_rows, stdout,
         );
@@ -483,6 +521,7 @@ pub fn render_kitty_frame(
             .saturating_mul(height)
             .saturating_mul(format.bytes_per_pixel()),
     );
+    let convert_start = Instant::now();
     if let Some(mb) = app_state.metal_backend.as_ref() {
         match format {
             KittyPayloadFormat::Rgba32 => {
@@ -493,21 +532,26 @@ pub fn render_kitty_frame(
             }
         }
     }
+    app_state.kitty_convert_ms = convert_start.elapsed().as_secs_f32() * 1000.0;
+
+    let encode_start = Instant::now();
+    let encoded = BASE64_STANDARD.encode(&payload);
+    app_state.kitty_encode_ms = encode_start.elapsed().as_secs_f32() * 1000.0;
+    debug_assert_eq!(encoded.len(), kitty_base64_len(payload.len()));
 
     let write_start = Instant::now();
     let image_id = app_state.kitty_image_id;
     let previous_image_id = app_state.kitty_visible_image_id;
     queue!(stdout, cursor::MoveTo(0, image_start_row as u16))?;
-    let (base64_bytes, chunks) = write_kitty_rgba_direct(
-        stdout,
+    let spec = KittyImageSpec {
         image_id,
         width,
         height,
         term_cols,
-        image_term_rows,
+        term_rows: image_term_rows,
         format,
-        &payload,
-    )?;
+    };
+    let (base64_bytes, chunks) = write_kitty_encoded_direct(stdout, spec, &encoded)?;
     if previous_image_id != 0 && previous_image_id != image_id {
         delete_kitty_image(stdout, previous_image_id)?;
     }
@@ -517,7 +561,11 @@ pub fn render_kitty_frame(
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
     app_state.kitty_write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
-    app_state.visible_splat_count = app_state.metal_active_splat_count;
+    if let Some(mb) = app_state.metal_backend.as_ref() {
+        let telemetry = mb.probe_telemetry();
+        app_state.visible_splat_count = telemetry.valid_count as usize;
+    }
+    app_state.effective_render_path = "metal_kitty";
     Ok(())
 }
 
@@ -539,12 +587,14 @@ mod tests {
 
         let (base64_bytes, chunks) = write_kitty_rgba_direct(
             &mut out,
-            1,
-            32,
-            32,
-            16,
-            16,
-            KittyPayloadFormat::Rgba32,
+            KittyImageSpec {
+                image_id: 1,
+                width: 32,
+                height: 32,
+                term_cols: 16,
+                term_rows: 16,
+                format: KittyPayloadFormat::Rgba32,
+            },
             &rgba,
         )
         .unwrap();

@@ -6,19 +6,34 @@ use crate::math::Vec3;
 use crate::render::{AppState, CameraMode};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Instant;
 
 use crate::AppResult;
 
-pub fn drain_input_events(
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct InputDrainStats {
+    pub quit_requested: bool,
+    pub events: usize,
+    pub oldest_age_ms: f64,
+}
+
+pub fn drain_input_events_with_stats(
     app_state: &mut AppState,
     input_rx: &Receiver<crate::input::thread::InputMessage>,
-) -> AppResult<bool> {
+) -> AppResult<InputDrainStats> {
+    let mut stats = InputDrainStats::default();
+    let now = Instant::now();
     loop {
         match input_rx.try_recv() {
-            Ok(crate::input::thread::InputMessage::Event(event)) => {
+            Ok(crate::input::thread::InputMessage::Event { event, read_at }) => {
+                stats.events += 1;
+                stats.oldest_age_ms = stats
+                    .oldest_age_ms
+                    .max(now.saturating_duration_since(read_at).as_secs_f64() * 1000.0);
                 handle_input_event(app_state, event)?;
                 if app_state.input_state.quit_requested {
-                    return Ok(true);
+                    stats.quit_requested = true;
+                    return Ok(stats);
                 }
             }
             Ok(crate::input::thread::InputMessage::ReadError(err)) => {
@@ -31,7 +46,16 @@ pub fn drain_input_events(
         }
     }
 
-    Ok(app_state.input_state.quit_requested)
+    stats.quit_requested = app_state.input_state.quit_requested;
+    Ok(stats)
+}
+
+#[allow(dead_code)]
+pub fn drain_input_events(
+    app_state: &mut AppState,
+    input_rx: &Receiver<crate::input::thread::InputMessage>,
+) -> AppResult<bool> {
+    Ok(drain_input_events_with_stats(app_state, input_rx)?.quit_requested)
 }
 
 /// Transition from Free camera to Orbit mode.
@@ -198,6 +222,7 @@ mod tests {
             last_frame_time: Instant::now(),
             fps: 0.0,
             visible_splat_count: 0,
+            effective_render_path: "test",
             orbit_angle: 0.0,
             orbit_radius: 5.0,
             orbit_height: 0.0,
@@ -227,11 +252,18 @@ mod tests {
             #[cfg(feature = "metal")]
             kitty_write_ms: 0.0,
             #[cfg(feature = "metal")]
+            kitty_convert_ms: 0.0,
+            #[cfg(feature = "metal")]
+            kitty_encode_ms: 0.0,
+            last_flush_ms: 0.0,
+            last_telemetry_write_ms: 0.0,
+            #[cfg(feature = "metal")]
             metal_backend: None,
             #[cfg(feature = "metal")]
             last_gpu_error: None,
             #[cfg(feature = "metal")]
             gpu_fallback_active: false,
+            live_telemetry: crate::render::live_telemetry::LiveTelemetryState::disabled(),
         }
     }
 
@@ -261,24 +293,27 @@ mod tests {
     #[test]
     fn drain_consumes_all_queued_events() {
         let (tx, rx) = mpsc::channel();
-        tx.send(crate::input::thread::InputMessage::Event(Event::Key(
-            crossterm::event::KeyEvent::new(
+        tx.send(crate::input::thread::InputMessage::Event {
+            event: Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Char('w'),
                 crossterm::event::KeyModifiers::NONE,
-            ),
-        )))
+            )),
+            read_at: Instant::now(),
+        })
         .expect("send w");
-        tx.send(crate::input::thread::InputMessage::Event(Event::Key(
-            crossterm::event::KeyEvent::new(
+        tx.send(crate::input::thread::InputMessage::Event {
+            event: Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Char('a'),
                 crossterm::event::KeyModifiers::NONE,
-            ),
-        )))
+            )),
+            read_at: Instant::now(),
+        })
         .expect("send a");
 
         let mut app = make_state();
-        let quit = drain_input_events(&mut app, &rx).expect("drain should succeed");
-        assert!(!quit);
+        let stats = drain_input_events_with_stats(&mut app, &rx).expect("drain should succeed");
+        assert!(!stats.quit_requested);
+        assert_eq!(stats.events, 2);
         assert!(app.input_state.held.forward);
         assert!(app.input_state.held.left);
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));

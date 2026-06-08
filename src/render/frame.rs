@@ -2,7 +2,9 @@ use crossterm::{queue, style::ResetColor, terminal};
 use std::io::{self, Write};
 use std::time::Instant;
 
-use super::{AppResult, AppState, CameraMode, RenderMode, FRAME_TARGET};
+use super::{
+    live_telemetry::LiveFrameTelemetry, AppResult, AppState, CameraMode, RenderMode, FRAME_TARGET,
+};
 
 const HALFBLOCK_FRAME_TARGET: std::time::Duration = std::time::Duration::from_millis(33);
 #[cfg(feature = "metal")]
@@ -30,6 +32,90 @@ fn update_orbit(app_state: &mut AppState, delta_time: f32) {
     crate::camera::look_at_target(&mut app_state.camera, target);
 }
 
+fn duration_ms(duration: std::time::Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+#[cfg(feature = "metal")]
+fn metal_gpu_wait_ms(app_state: &AppState) -> f64 {
+    app_state
+        .metal_backend
+        .as_ref()
+        .map(|mb| {
+            let telemetry = mb.probe_telemetry();
+            telemetry.stage_timings[..telemetry.stage_timing_count]
+                .iter()
+                .map(|stage| stage.wait_ms)
+                .sum()
+        })
+        .unwrap_or(0.0)
+        .max(0.0)
+}
+
+fn build_live_frame_telemetry(
+    app_state: &AppState,
+    input_stats: crate::input::InputDrainStats,
+    target: std::time::Duration,
+    frame_ms: f64,
+    render_ms: f64,
+    flush_ms: f64,
+    sleep_ms: f64,
+) -> LiveFrameTelemetry {
+    #[allow(unused_mut)]
+    let mut telemetry = LiveFrameTelemetry {
+        frame: app_state.frame_count,
+        frame_ms,
+        target_ms: duration_ms(target),
+        sleep_ms,
+        input_events: input_stats.events,
+        oldest_input_age_ms: input_stats.oldest_age_ms,
+        render_ms,
+        flush_ms,
+        effective_path: app_state.effective_render_path,
+        source_splat_count: app_state.splats.len(),
+        active_splat_count: app_state.splats.len(),
+        valid_count: app_state.visible_splat_count,
+        previous_telemetry_write_ms: app_state.last_telemetry_write_ms as f64,
+        ..LiveFrameTelemetry::default()
+    };
+
+    #[cfg(feature = "metal")]
+    {
+        telemetry.gpu_wait_ms = metal_gpu_wait_ms(app_state);
+        telemetry.convert_ms = app_state.kitty_convert_ms as f64;
+        telemetry.encode_ms = app_state.kitty_encode_ms as f64;
+        telemetry.write_ms = app_state.kitty_write_ms as f64;
+        telemetry.payload_bytes = app_state.kitty_payload_bytes;
+        telemetry.base64_bytes = app_state.kitty_base64_bytes;
+        telemetry.chunks = app_state.kitty_chunks;
+        if app_state.effective_render_path.starts_with("metal_") {
+            let Some(mb) = app_state.metal_backend.as_ref() else {
+                return telemetry;
+            };
+            let metal = mb.probe_telemetry();
+            telemetry.quality = match std::env::var("TORTUISE_METAL_QUALITY") {
+                Ok(value) => match value.trim() {
+                    "fast-preview" => "fast-preview",
+                    "turbo" => "turbo",
+                    _ => "exact",
+                },
+                Err(_) => "exact",
+            };
+            telemetry.sort_path = metal.sort_path;
+            telemetry.lod_mode = metal.lod_mode;
+            telemetry.lod_mapping = metal.lod_mapping;
+            telemetry.source_splat_count = metal.source_splat_count;
+            telemetry.active_splat_count = metal.active_splat_count;
+            telemetry.valid_count = metal.valid_count as usize;
+            telemetry.actual_total_overlaps = metal.actual_total_overlaps;
+            telemetry.overflow_flag = metal.overflow_flag;
+            telemetry.retry_count = metal.retry_count;
+        }
+    }
+
+    telemetry
+}
+
 pub fn render_frame(
     app_state: &mut AppState,
     terminal_size: (u16, u16),
@@ -51,6 +137,8 @@ pub fn render_frame(
         app_state.kitty_base64_bytes = 0;
         app_state.kitty_chunks = 0;
         app_state.kitty_write_ms = 0.0;
+        app_state.kitty_convert_ms = 0.0;
+        app_state.kitty_encode_ms = 0.0;
     }
 
     match app_state.render_mode {
@@ -68,6 +156,7 @@ pub fn render_frame(
         | RenderMode::BlockDensity
         | RenderMode::Braille
         | RenderMode::AsciiClassic => {
+            app_state.effective_render_path = "cpu_text";
             let proj_w = term_cols;
             let proj_h = term_rows * 2;
             super::pipeline::cpu_project_and_sort(app_state, proj_w, proj_h);
@@ -128,7 +217,7 @@ pub fn render_frame(
     }
 
     queue!(stdout, ResetColor)?;
-    stdout.flush()
+    Ok(())
 }
 
 pub fn run_app_loop(
@@ -139,7 +228,8 @@ pub fn run_app_loop(
     loop {
         let frame_start = Instant::now();
 
-        if crate::input::drain_input_events(app_state, input_rx)? {
+        let input_stats = crate::input::drain_input_events_with_stats(app_state, input_rx)?;
+        if input_stats.quit_requested {
             break;
         }
 
@@ -158,7 +248,14 @@ pub fn run_app_loop(
         }
 
         let terminal_size = terminal::size()?;
+        let render_start = Instant::now();
         render_frame(app_state, terminal_size, stdout)?;
+        let render_ms = duration_ms(render_start.elapsed());
+
+        let flush_start = Instant::now();
+        stdout.flush()?;
+        let flush_ms = duration_ms(flush_start.elapsed());
+        app_state.last_flush_ms = flush_ms as f32;
 
         app_state.frame_count += 1;
         let instant_fps = 1.0 / delta_time;
@@ -175,8 +272,25 @@ pub fn run_app_loop(
             RenderMode::Kitty => kitty_frame_target(),
             _ => FRAME_TARGET,
         };
+        let mut sleep_ms = 0.0;
         if spent < target {
-            std::thread::sleep(target - spent);
+            let sleep_for = target - spent;
+            let sleep_start = Instant::now();
+            std::thread::sleep(sleep_for);
+            sleep_ms = duration_ms(sleep_start.elapsed());
+        }
+        let frame_ms = duration_ms(frame_start.elapsed());
+        if app_state.live_telemetry.is_enabled() {
+            let live_frame = build_live_frame_telemetry(
+                app_state,
+                input_stats,
+                target,
+                frame_ms,
+                render_ms,
+                flush_ms,
+                sleep_ms,
+            );
+            app_state.last_telemetry_write_ms = app_state.live_telemetry.record(live_frame)? as f32;
         }
     }
 

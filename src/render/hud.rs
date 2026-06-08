@@ -7,19 +7,6 @@ use std::io::{self, Write};
 
 use super::{make_color, AppState, RenderMode};
 
-fn effective_render_path(app_state: &AppState) -> &'static str {
-    match app_state.render_mode {
-        RenderMode::Halfblock => app_state.backend.name(),
-        #[cfg(feature = "metal")]
-        RenderMode::Kitty => app_state.backend.name(),
-        RenderMode::PointCloud
-        | RenderMode::Matrix
-        | RenderMode::BlockDensity
-        | RenderMode::Braille
-        | RenderMode::AsciiClassic => "CPU",
-    }
-}
-
 fn truncate_and_pad_in_place(text: &mut String, width: usize) {
     if width == 0 {
         text.clear();
@@ -55,15 +42,35 @@ pub fn draw_hud(
     let width = cols as usize;
     let term_cols = cols as usize;
     let term_rows = rows as usize;
-    let render_path = effective_render_path(app_state);
+    let render_path = app_state.effective_render_path;
     let hud = &mut app_state.hud_string_buf;
     hud.clear();
+    #[cfg(feature = "metal")]
+    let splat_label = if app_state.effective_render_path.starts_with("metal_") {
+        format!(
+            "{}/{}/{}",
+            app_state.visible_splat_count,
+            app_state.metal_active_splat_count,
+            app_state.splats.len()
+        )
+    } else {
+        format!(
+            "{}/{}",
+            app_state.visible_splat_count,
+            app_state.splats.len()
+        )
+    };
+    #[cfg(not(feature = "metal"))]
+    let splat_label = format!(
+        "{}/{}",
+        app_state.visible_splat_count,
+        app_state.splats.len()
+    );
     write!(
         hud,
-        "FPS:{:>5.1}  Splats:{}/{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Render:{}  SS:",
+        "FPS:{:>5.1}  Splats:{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Render:{}  SS:",
         app_state.fps,
-        app_state.visible_splat_count,
-        app_state.splats.len(),
+        splat_label,
         app_state.camera.position.x,
         app_state.camera.position.y,
         app_state.camera.position.z,
@@ -102,11 +109,11 @@ pub fn draw_hud(
     if app_state.render_mode == RenderMode::Kitty {
         write!(
             hud,
-            "  Kitty:{}B/{}B {}ch {:.1}ms",
+            "  Kitty:{}B/{}B {}ch flush{:.1}ms",
             app_state.kitty_payload_bytes,
             app_state.kitty_base64_bytes,
             app_state.kitty_chunks,
-            app_state.kitty_write_ms
+            app_state.last_flush_ms
         )
         .map_err(|_| io::Error::other("failed to format HUD"))?;
     }

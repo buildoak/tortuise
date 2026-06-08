@@ -145,6 +145,12 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(long, help = "Start in Kitty graphics protocol render mode")]
     kitty: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write opt-in live per-frame telemetry as JSONL"
+    )]
+    live_telemetry_jsonl: Option<PathBuf>,
     #[cfg(feature = "metal")]
     #[arg(
         long,
@@ -798,6 +804,7 @@ fn main() -> AppResult<()> {
     let mut metal_backend = if backend == Backend::Metal {
         match render::metal::MetalBackend::new(splats.len()) {
             Ok(mut mb) => {
+                mb.set_probe_stage_timing_enabled(cli.live_telemetry_jsonl.is_some());
                 mb.upload_splats(&splats)?;
                 mb.upload_lod_indices(&metal_lod_indices)?;
                 Some(mb)
@@ -836,6 +843,7 @@ fn main() -> AppResult<()> {
         last_frame_time: Instant::now(),
         fps: 0.0,
         visible_splat_count: 0,
+        effective_render_path: "startup",
         orbit_angle,
         orbit_radius,
         orbit_height,
@@ -878,11 +886,20 @@ fn main() -> AppResult<()> {
         #[cfg(feature = "metal")]
         kitty_write_ms: 0.0,
         #[cfg(feature = "metal")]
+        kitty_convert_ms: 0.0,
+        #[cfg(feature = "metal")]
+        kitty_encode_ms: 0.0,
+        last_flush_ms: 0.0,
+        last_telemetry_write_ms: 0.0,
+        #[cfg(feature = "metal")]
         metal_backend: metal_backend.take(),
         #[cfg(feature = "metal")]
         last_gpu_error: None,
         #[cfg(feature = "metal")]
         gpu_fallback_active: false,
+        live_telemetry: render::live_telemetry::LiveTelemetryState::to_path(
+            cli.live_telemetry_jsonl.as_deref(),
+        )?,
     };
 
     crossterm::terminal::enable_raw_mode()?;
