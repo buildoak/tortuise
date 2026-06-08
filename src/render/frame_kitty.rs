@@ -542,6 +542,11 @@ fn write_kitty_pixel_hud(
     let top_encoded = BASE64_STANDARD.encode(&top_payload);
     let bottom_encoded = BASE64_STANDARD.encode(&bottom_payload);
 
+    // Kitty terminals can keep multiple placements for the same image id.
+    // Delete the old HUD ids before placing the new bars so resizing/rotation
+    // cannot leave stacked HUD ghosts behind.
+    delete_kitty_hud_images(stdout)?;
+
     queue!(stdout, cursor::MoveTo(0, 0))?;
     write_kitty_encoded_direct(
         stdout,
