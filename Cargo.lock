@@ -613,6 +613,7 @@ dependencies = [
  "base64",
  "clap",
  "crossterm",
+ "libc",
  "metal",
  "objc",
  "png",

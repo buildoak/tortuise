@@ -60,7 +60,6 @@ mod tests {
                 height: 2,
             },
             halfblock_cells: Vec::new(),
-            hud_string_buf: String::new(),
             scene_label: "test".to_string(),
             input_state: InputState::default(),
             show_hud: true,
@@ -96,6 +95,8 @@ mod tests {
             kitty_image_id: 1,
             #[cfg(feature = "metal")]
             kitty_visible_image_id: 0,
+            #[cfg(feature = "metal")]
+            kitty_pixel_hud_active: false,
             #[cfg(feature = "metal")]
             kitty_payload_bytes: 0,
             #[cfg(feature = "metal")]

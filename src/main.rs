@@ -841,7 +841,6 @@ fn main() -> AppResult<()> {
             height,
         },
         halfblock_cells: Vec::with_capacity(width * rows.max(1) as usize),
-        hud_string_buf: String::with_capacity(512),
         scene_label,
         input_state: input::state::InputState::default(),
         show_hud: true,
@@ -890,6 +889,8 @@ fn main() -> AppResult<()> {
         kitty_image_id: 1,
         #[cfg(feature = "metal")]
         kitty_visible_image_id: 0,
+        #[cfg(feature = "metal")]
+        kitty_pixel_hud_active: false,
         #[cfg(feature = "metal")]
         kitty_payload_bytes: 0,
         #[cfg(feature = "metal")]
