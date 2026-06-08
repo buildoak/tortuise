@@ -315,7 +315,11 @@ fn draw_kitty_bitmap_hud(
     format: KittyPayloadFormat,
     scale_divisor: usize,
 ) {
-    if app_state.hud_mode == HudMode::Hidden || width < 80 || height < 24 {
+    if std::env::var("TORTUISE_KITTY_BITMAP_HUD").ok().as_deref() != Some("1")
+        || app_state.hud_mode == HudMode::Hidden
+        || width < 80
+        || height < 24
+    {
         return;
     }
 
@@ -751,8 +755,10 @@ fn clear_kitty_transport_stats(app_state: &mut AppState) {
 
 #[cfg_attr(not(any(test, feature = "metal")), allow(dead_code))]
 fn kitty_image_placement_rows(show_hud: bool, term_rows: usize) -> (usize, usize) {
-    let _ = show_hud;
-    (0, term_rows.max(1))
+    let reserved_hud_rows = if show_hud && term_rows > 2 { 2 } else { 0 };
+    let image_term_rows = term_rows.saturating_sub(reserved_hud_rows).max(1);
+    let image_start_row = if reserved_hud_rows > 0 { 1 } else { 0 };
+    (image_start_row, image_term_rows)
 }
 
 #[cfg(feature = "metal")]
@@ -954,8 +960,8 @@ mod tests {
     }
 
     #[test]
-    fn kitty_image_placement_uses_full_terminal_for_bitmap_hud() {
-        assert_eq!(kitty_image_placement_rows(true, 40), (0, 40));
+    fn kitty_image_placement_reserves_terminal_hud_rows() {
+        assert_eq!(kitty_image_placement_rows(true, 40), (1, 38));
         assert_eq!(kitty_image_placement_rows(false, 40), (0, 40));
         assert_eq!(kitty_image_placement_rows(true, 2), (0, 2));
         assert_eq!(kitty_image_placement_rows(true, 0), (0, 1));

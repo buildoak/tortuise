@@ -46,8 +46,10 @@ Runtime behavior:
 
 - Kitty mode is available only with the `metal` feature.
 - The renderer uses the Metal packed framebuffer as the source of truth.
-- When HUD is visible, Kitty mode draws a fixed-pixel bitmap HUD into the image
-  payload. It does not reserve terminal text rows.
+- When HUD is visible, Kitty mode reserves top and bottom terminal rows for the
+  normal crisp terminal HUD. Experimental bitmap HUD can be enabled with
+  `TORTUISE_KITTY_BITMAP_HUD=1`, but it is not the default because terminal
+  image scaling can blur/distort in-image text.
 - Live Kitty mode clears stale images when switching from Kitty to text modes.
   It alternates between two Kitty image ids, writes the new frame first, and
   then deletes the previous id. This avoids visible terminal background flicker
