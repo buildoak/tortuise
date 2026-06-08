@@ -151,10 +151,22 @@ impl MetalBackend {
             }
             self.ensure_tile_capacity(num_tiles)?;
 
+            let estimate_previous_total_overlaps =
+                if self.previous_total_overlaps == 0 && lod_mode == MetalLodMode::Fixed {
+                    active_splat_count.min(u32::MAX as usize) as u32
+                } else {
+                    self.previous_total_overlaps
+                };
+            let estimate_previous_num_tiles =
+                if self.previous_total_overlaps == 0 && lod_mode == MetalLodMode::Fixed {
+                    num_tiles
+                } else {
+                    previous_num_tiles
+                };
             let mut estimated_overlaps = estimate_overlaps_for_attempt(
                 active_splat_count,
-                self.previous_total_overlaps,
-                previous_num_tiles,
+                estimate_previous_total_overlaps,
+                estimate_previous_num_tiles,
                 num_tiles,
             );
 
