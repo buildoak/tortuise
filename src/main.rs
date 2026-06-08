@@ -175,6 +175,13 @@ struct Cli {
         help = "Metal quality tier; exact preserves correctness, fast-preview/turbo are approximate"
     )]
     metal_quality: Option<String>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Fast-preview alpha cutoff; lower values keep fainter splats at higher cost"
+    )]
+    metal_fast_alpha_cutoff: Option<f32>,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -481,6 +488,12 @@ fn apply_metal_quality_override(cli: &Cli) -> AppResult<()> {
                 .into());
             }
         }
+    }
+    if let Some(value) = cli.metal_fast_alpha_cutoff {
+        if !value.is_finite() || value < 0.0 {
+            return Err("--metal-fast-alpha-cutoff must be a finite value >= 0".into());
+        }
+        std::env::set_var("TORTUISE_METAL_FAST_ALPHA_CUTOFF", value.to_string());
     }
     Ok(())
 }
@@ -830,6 +843,11 @@ mod tests {
         cli.metal_quality = Some("wat".to_string());
         let err = apply_metal_quality_override(&cli).unwrap_err();
         assert!(err.to_string().contains("Invalid --metal-quality"));
+
+        cli.metal_quality = None;
+        cli.metal_fast_alpha_cutoff = Some(-1.0);
+        let err = apply_metal_quality_override(&cli).unwrap_err();
+        assert!(err.to_string().contains("--metal-fast-alpha-cutoff"));
     }
 
     #[cfg(feature = "metal")]
