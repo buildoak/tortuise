@@ -75,10 +75,22 @@ fn build_live_frame_telemetry(
     input_stats: crate::input::InputDrainStats,
     target: std::time::Duration,
     frame_ms: f64,
+    input_drain_ms: f64,
     render_ms: f64,
     flush_ms: f64,
     sleep_ms: f64,
 ) -> LiveFrameTelemetry {
+    #[cfg(feature = "metal")]
+    let terminal_write_ms = app_state.kitty_write_ms as f64;
+    #[cfg(not(feature = "metal"))]
+    let terminal_write_ms = 0.0;
+    let terminal_ms = terminal_write_ms + flush_ms;
+    let interaction_latency_ms = if input_stats.events > 0 {
+        input_stats.oldest_age_ms + input_drain_ms + render_ms + flush_ms
+    } else {
+        0.0
+    };
+
     #[allow(unused_mut)]
     let mut telemetry = LiveFrameTelemetry {
         frame: app_state.frame_count,
@@ -87,7 +99,10 @@ fn build_live_frame_telemetry(
         sleep_ms,
         input_events: input_stats.events,
         oldest_input_age_ms: input_stats.oldest_age_ms,
+        input_drain_ms,
+        interaction_latency_ms,
         render_ms,
+        terminal_ms,
         flush_ms,
         effective_path: app_state.effective_render_path,
         render_width: app_state.last_render_width,
@@ -112,7 +127,7 @@ fn build_live_frame_telemetry(
         telemetry.gpu_wait_ms = metal_gpu_wait_ms(app_state);
         telemetry.convert_ms = app_state.kitty_convert_ms as f64;
         telemetry.encode_ms = app_state.kitty_encode_ms as f64;
-        telemetry.write_ms = app_state.kitty_write_ms as f64;
+        telemetry.write_ms = terminal_write_ms;
         telemetry.payload_bytes = app_state.kitty_payload_bytes;
         telemetry.base64_bytes = app_state.kitty_base64_bytes;
         telemetry.chunks = app_state.kitty_chunks;
@@ -273,7 +288,9 @@ pub fn run_app_loop(
     loop {
         let frame_start = Instant::now();
 
+        let input_drain_start = Instant::now();
         let input_stats = crate::input::drain_input_events_with_stats(app_state, input_rx)?;
+        let input_drain_ms = duration_ms(input_drain_start.elapsed());
         if input_stats.quit_requested {
             break;
         }
@@ -331,6 +348,7 @@ pub fn run_app_loop(
                 input_stats,
                 target,
                 frame_ms,
+                input_drain_ms,
                 render_ms,
                 flush_ms,
                 sleep_ms,

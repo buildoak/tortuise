@@ -24,7 +24,10 @@ pub struct LiveFrameTelemetry {
     pub sleep_ms: f64,
     pub input_events: usize,
     pub oldest_input_age_ms: f64,
+    pub input_drain_ms: f64,
+    pub interaction_latency_ms: f64,
     pub render_ms: f64,
+    pub terminal_ms: f64,
     pub gpu_wait_ms: f64,
     pub convert_ms: f64,
     pub encode_ms: f64,
@@ -57,7 +60,7 @@ pub struct LiveFrameTelemetry {
 impl Default for LiveFrameTelemetry {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             frame: 0,
             render_width: 0,
             render_height: 0,
@@ -77,7 +80,10 @@ impl Default for LiveFrameTelemetry {
             sleep_ms: 0.0,
             input_events: 0,
             oldest_input_age_ms: 0.0,
+            input_drain_ms: 0.0,
+            interaction_latency_ms: 0.0,
             render_ms: 0.0,
+            terminal_ms: 0.0,
             gpu_wait_ms: 0.0,
             convert_ms: 0.0,
             encode_ms: 0.0,
@@ -173,7 +179,10 @@ impl LiveTelemetryState {
                 "\"sleep_ms\":{:.3},",
                 "\"input_events\":{},",
                 "\"oldest_input_age_ms\":{:.3},",
+                "\"input_drain_ms\":{:.3},",
+                "\"interaction_latency_ms\":{:.3},",
                 "\"render_ms\":{:.3},",
+                "\"terminal_ms\":{:.3},",
                 "\"gpu_wait_ms\":{:.3},",
                 "\"convert_ms\":{:.3},",
                 "\"encode_ms\":{:.3},",
@@ -223,7 +232,10 @@ impl LiveTelemetryState {
             self.last.sleep_ms,
             self.last.input_events,
             self.last.oldest_input_age_ms,
+            self.last.input_drain_ms,
+            self.last.interaction_latency_ms,
             self.last.render_ms,
+            self.last.terminal_ms,
             self.last.gpu_wait_ms,
             self.last.convert_ms,
             self.last.encode_ms,
@@ -290,6 +302,9 @@ mod tests {
             let frame = LiveFrameTelemetry {
                 frame: 3,
                 effective_path: "metal_kitty",
+                input_drain_ms: 0.4,
+                interaction_latency_ms: 12.5,
+                terminal_ms: 1.2,
                 payload_bytes: 12,
                 valid_count: 5,
                 active_splat_count: 7,
@@ -302,9 +317,12 @@ mod tests {
 
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert!(text.contains("\"schema_version\":2"));
+        assert!(text.contains("\"schema_version\":3"));
         assert!(text.contains("\"frame\":3"));
         assert!(text.contains("\"camera\""));
+        assert!(text.contains("\"input_drain_ms\":0.400"));
+        assert!(text.contains("\"interaction_latency_ms\":12.500"));
+        assert!(text.contains("\"terminal_ms\":1.200"));
         assert!(text.contains("\"effective_path\":\"metal_kitty\""));
         assert!(text.contains("\"valid_count\":5"));
         assert!(text.contains("\"previous_telemetry_write_ms\":0.000"));

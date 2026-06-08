@@ -12,6 +12,16 @@ Run a scene in Kitty graphics protocol mode:
 cargo run --features metal --release -- "$SCENE" --kitty
 ```
 
+MacBook Neo known-good live preset:
+
+```bash
+cargo run --features metal --release -- "$SCENE" --live-preset macbook-neo
+```
+
+This expands to Kitty RGB transport, 33ms Kitty frame pacing, turbo Metal,
+fixed voxel LoD, 2.1M active splats, alpha cutoff `0.00001`, tile budget
+`131072`, and the Bee-tested starting camera `0,0,0.5`.
+
 Transport/quality knobs:
 
 ```bash
@@ -58,6 +68,9 @@ Runtime behavior:
   image data chunks.
 - HUD telemetry reports canvas resolution, render path, splat counts, Kitty
   transport timing, and payload/chunk counters.
+- Live JSONL telemetry also reports hands-control preparation fields:
+  `input_drain_ms`, `oldest_input_age_ms`, `interaction_latency_ms`,
+  `render_ms`, `terminal_ms`, `write_ms`, and `flush_ms`.
 - If Metal is unavailable or fails, the app falls back to halfblock rendering.
 
 The current live path sends a full RGBA frame. Dirty-frame updates, placement

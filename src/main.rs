@@ -154,6 +154,13 @@ struct Cli {
     #[cfg(feature = "metal")]
     #[arg(
         long,
+        value_name = "macbook-neo",
+        help = "Apply a known-good interactive live preset"
+    )]
+    live_preset: Option<String>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
         value_name = "rgba|rgb",
         help = "Kitty graphics payload format; rgb cuts transport bytes by 25% when alpha is not needed"
     )]
@@ -366,6 +373,31 @@ fn normalized_metal_quality(cli: &Cli) -> &'static str {
             _ => "exact",
         },
         None => "exact",
+    }
+}
+
+#[cfg(feature = "metal")]
+fn apply_live_preset(cli: &mut Cli) -> AppResult<()> {
+    let Some(raw) = cli.live_preset.as_deref() else {
+        return Ok(());
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "macbook-neo" | "neo" => {
+            cli.kitty = true;
+            cli.kitty_format = Some("rgb".to_string());
+            cli.kitty_frame_ms = 33;
+            cli.metal_quality = Some("turbo".to_string());
+            cli.metal_fast_alpha_cutoff = Some(0.00001);
+            cli.metal_fast_tile_budget = Some(131_072);
+            cli.metal_lod = "fixed".to_string();
+            cli.metal_lod_splat_count = Some(2_100_000);
+            cli.metal_lod_order = "voxel".to_string();
+            if cli.camera_pos.is_none() {
+                cli.camera_pos = Some("0,0,0.5".to_string());
+            }
+            Ok(())
+        }
+        _ => Err(format!("Invalid --live-preset '{raw}'. Expected macbook-neo").into()),
     }
 }
 
@@ -714,6 +746,8 @@ fn run_kitty_replay(cli: &Cli, path: PathBuf) -> AppResult<()> {
 fn main() -> AppResult<()> {
     install_panic_hook();
     let cli = Cli::parse();
+    #[cfg(feature = "metal")]
+    let mut cli = cli;
 
     if let Some(path) = cli.kitty_replay.clone() {
         return run_kitty_replay(&cli, path);
@@ -728,6 +762,9 @@ fn main() -> AppResult<()> {
         println!();
         std::process::exit(0);
     }
+
+    #[cfg(feature = "metal")]
+    apply_live_preset(&mut cli)?;
 
     #[cfg(feature = "metal")]
     apply_metal_quality_override(&cli)?;
@@ -1089,6 +1126,26 @@ mod tests {
         ]);
         let err = validate_metal_lod_cli(&cli).unwrap_err();
         assert!(err.to_string().contains("--cpu"));
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn macbook_neo_live_preset_expands_known_good_settings() {
+        let mut cli = Cli::parse_from(["tortuise", "--live-preset", "macbook-neo", "bee.ply"]);
+
+        apply_live_preset(&mut cli).unwrap();
+
+        assert!(cli.kitty);
+        assert_eq!(cli.kitty_format.as_deref(), Some("rgb"));
+        assert_eq!(cli.kitty_frame_ms, 33);
+        assert_eq!(cli.metal_quality.as_deref(), Some("turbo"));
+        assert_eq!(cli.metal_fast_alpha_cutoff, Some(0.00001));
+        assert_eq!(cli.metal_fast_tile_budget, Some(131_072));
+        assert_eq!(cli.metal_lod, "fixed");
+        assert_eq!(cli.metal_lod_splat_count, Some(2_100_000));
+        assert_eq!(cli.metal_lod_order, "voxel");
+        assert_eq!(cli.camera_pos.as_deref(), Some("0,0,0.5"));
+        validate_metal_lod_cli(&cli).unwrap();
     }
 
     #[cfg(feature = "metal")]
