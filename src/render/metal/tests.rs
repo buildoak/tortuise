@@ -13,7 +13,7 @@ use crate::{
     math::Vec3,
     render::{
         modes::halfblock::downsample_packed_to_terminal_into, pipeline, rasterizer, HalfblockCell,
-        MetalLodMode, RenderState,
+        MetalLodMode, MetalLodOrder, RenderState,
     },
     sort::sort_by_depth,
     splat::Splat,
@@ -193,6 +193,7 @@ fn test_halfblock_downsample_matches_cpu_oracle_after_render() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("render should succeed");
@@ -449,7 +450,16 @@ fn test_render_empty_scene() {
         .expect("upload_splats should accept empty slice");
 
     backend
-        .render(&camera, 64, 64, 0, 0, MetalLodMode::Off, None)
+        .render(
+            &camera,
+            64,
+            64,
+            0,
+            0,
+            MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
+            None,
+        )
         .expect("render should succeed for empty scene");
     let framebuffer = backend.framebuffer_slice().to_vec();
     assert!(framebuffer.is_empty() || framebuffer.iter().all(|&p| p == 0));
@@ -480,6 +490,7 @@ fn test_render_matches_cpu() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("GPU render should succeed");
@@ -526,6 +537,7 @@ fn test_resize_handling() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("64x64 render should succeed");
@@ -538,6 +550,7 @@ fn test_resize_handling() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("256x256 render should succeed");
@@ -550,6 +563,7 @@ fn test_resize_handling() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("second 64x64 render should succeed");
@@ -582,6 +596,7 @@ fn test_high_tile_count_render_exceeds_legacy_ten_bit_tile_limit() {
             splats.len(),
             splats.len(),
             MetalLodMode::Off,
+            MetalLodOrder::FloorEven,
             None,
         )
         .expect("high-tile render should exceed the old 1023-tile limit without failing");

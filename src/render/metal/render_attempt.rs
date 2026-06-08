@@ -243,6 +243,7 @@ fn run_single_render_attempt_fused(
     set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
     set_bytes_f32(encoder, 8, fast_alpha_cutoff);
     set_bytes_u32(encoder, 9, source_splat_count_u32);
+    encoder.set_buffer(10, Some(&backend.lod_indices_buffer), 0);
     dispatch_1d(encoder, active_splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 
@@ -585,6 +586,7 @@ fn run_single_render_attempt_two_stage(
     set_bytes_u32(encoder, 7, u32::from(fast_quality_enabled));
     set_bytes_f32(encoder, 8, fast_alpha_cutoff);
     set_bytes_u32(encoder, 9, source_splat_count_u32);
+    encoder.set_buffer(10, Some(&backend.lod_indices_buffer), 0);
     dispatch_1d(encoder, active_splat_count_u32, THREADS_PER_GROUP_1D);
     encoder.end_encoding();
 

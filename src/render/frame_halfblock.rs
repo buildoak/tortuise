@@ -326,6 +326,7 @@ fn gpu_render_to_framebuffer(app_state: &mut AppState, width: usize, height: usi
                 app_state.metal_active_splat_count,
                 app_state.splats.len(),
                 app_state.metal_lod_mode,
+                app_state.metal_lod_order,
                 app_state.metal_lod_requested_splat_count,
             ),
             None => return false,

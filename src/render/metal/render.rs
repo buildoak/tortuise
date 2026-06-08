@@ -6,7 +6,7 @@ use super::render_attempt::run_single_render_attempt;
 use super::sort::div_ceil_u32;
 use super::types::TILE_SIZE;
 use super::MetalBackend;
-use crate::render::MetalLodMode;
+use crate::render::{MetalLodMode, MetalLodOrder};
 
 const MAX_SORT_KEY_ORIGINAL_INDEX: usize = (1 << 22) - 1;
 const MAX_SORT_KEY_TILE_COUNT: u64 = (1 << 16) - 1;
@@ -71,6 +71,7 @@ impl MetalBackend {
         active_splat_count: usize,
         source_splat_count: usize,
         lod_mode: MetalLodMode,
+        lod_order: MetalLodOrder,
         lod_requested_splat_count: Option<usize>,
     ) -> Result<(), MetalRenderError> {
         autoreleasepool(|| {
@@ -134,7 +135,10 @@ impl MetalBackend {
             self.last_overflow_flag = 0;
             self.last_tile_density = Default::default();
             self.last_lod_mode = lod_mode.name();
-            self.last_lod_mapping = lod_mode.mapping_name();
+            self.last_lod_mapping = match lod_mode {
+                MetalLodMode::Off => "identity",
+                MetalLodMode::Fixed => lod_order.name(),
+            };
             self.last_lod_requested_splat_count = lod_requested_splat_count;
             self.last_source_splat_count = source_splat_count;
             self.last_active_splat_count = active_splat_count;

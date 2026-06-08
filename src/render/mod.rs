@@ -3,6 +3,8 @@ mod frame_halfblock;
 pub mod frame_kitty;
 pub mod hud;
 #[cfg(feature = "metal")]
+pub mod lod;
+#[cfg(feature = "metal")]
 pub mod metal;
 pub mod modes;
 pub mod pipeline;
@@ -243,11 +245,21 @@ impl MetalLodMode {
             Self::Fixed => "fixed",
         }
     }
+}
 
-    pub fn mapping_name(self) -> &'static str {
+#[cfg(feature = "metal")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetalLodOrder {
+    FloorEven,
+    Voxel,
+}
+
+#[cfg(feature = "metal")]
+impl MetalLodOrder {
+    pub fn name(self) -> &'static str {
         match self {
-            Self::Off => "identity",
-            Self::Fixed => "floor_even",
+            Self::FloorEven => "floor_even",
+            Self::Voxel => "voxel",
         }
     }
 }
@@ -282,6 +294,8 @@ pub struct AppState {
     pub metal_lod_requested_splat_count: Option<usize>,
     #[cfg(feature = "metal")]
     pub metal_active_splat_count: usize,
+    #[cfg(feature = "metal")]
+    pub metal_lod_order: MetalLodOrder,
     #[cfg(feature = "metal")]
     pub kitty_image_id: u32,
     #[cfg(feature = "metal")]

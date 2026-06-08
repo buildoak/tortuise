@@ -242,6 +242,8 @@ pub struct ProbeConfig {
     #[cfg(feature = "metal")]
     pub metal_lod_mode: super::MetalLodMode,
     #[cfg(feature = "metal")]
+    pub metal_lod_order: super::MetalLodOrder,
+    #[cfg(feature = "metal")]
     pub metal_lod_requested_splat_count: Option<usize>,
 }
 
@@ -263,6 +265,8 @@ impl ProbeConfig {
             timing: false,
             #[cfg(feature = "metal")]
             metal_lod_mode: super::MetalLodMode::Off,
+            #[cfg(feature = "metal")]
+            metal_lod_order: super::MetalLodOrder::FloorEven,
             #[cfg(feature = "metal")]
             metal_lod_requested_splat_count: None,
         }
@@ -846,6 +850,14 @@ fn render_metal_probe_frames(
             .unwrap_or(source_splat_count)
             .min(source_splat_count),
     };
+    let lod_indices = super::lod::build_metal_lod_indices(
+        splats,
+        config.metal_lod_mode,
+        config.metal_lod_order,
+        active_splat_count,
+    )
+    .map_err(|err| ProbeError::Render(err.to_string()))?;
+    backend.upload_lod_indices(&lod_indices)?;
     let mut timing = ProbeBackendTiming {
         frames: config.frames,
         warmup_frames: config.warmup_frames,
@@ -860,6 +872,7 @@ fn render_metal_probe_frames(
             active_splat_count,
             source_splat_count,
             config.metal_lod_mode,
+            config.metal_lod_order,
             config.metal_lod_requested_splat_count,
         )?;
         let _ = backend.framebuffer_slice();
@@ -877,6 +890,7 @@ fn render_metal_probe_frames(
             active_splat_count,
             source_splat_count,
             config.metal_lod_mode,
+            config.metal_lod_order,
             config.metal_lod_requested_splat_count,
         )?;
         timing.render_ms += duration_ms(render_started.elapsed());

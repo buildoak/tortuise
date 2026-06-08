@@ -416,6 +416,7 @@ fn render_metal_framebuffer(
             app_state.metal_active_splat_count,
             app_state.splats.len(),
             app_state.metal_lod_mode,
+            app_state.metal_lod_order,
             app_state.metal_lod_requested_splat_count,
         ),
         None => Err(crate::render::metal::MetalRenderError::GpuDisabled),

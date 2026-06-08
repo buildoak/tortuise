@@ -84,6 +84,7 @@ pub struct MetalBackend {
     pub(super) downsample_halfblock_pipeline: ComputePipelineState,
 
     pub(super) splat_buffer: Buffer,
+    pub(super) lod_indices_buffer: Buffer,
     pub(super) camera_buffer: Buffer,
     pub(super) valid_count_buffer: Buffer,
     pub(super) total_overlaps_buffer: Buffer,

@@ -204,6 +204,14 @@ struct Cli {
         help = "Active splat count for --metal-lod fixed"
     )]
     metal_lod_splat_count: Option<usize>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "floor-even|voxel",
+        default_value = "voxel",
+        help = "Stable source ordering used by --metal-lod fixed"
+    )]
+    metal_lod_order: String,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -335,6 +343,15 @@ fn parse_metal_lod_mode(raw: &str) -> AppResult<render::MetalLodMode> {
 }
 
 #[cfg(feature = "metal")]
+fn parse_metal_lod_order(raw: &str) -> AppResult<render::MetalLodOrder> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "floor-even" | "floor_even" | "even" => Ok(render::MetalLodOrder::FloorEven),
+        "voxel" | "voxels" | "spatial" => Ok(render::MetalLodOrder::Voxel),
+        _ => Err(format!("Invalid --metal-lod-order '{raw}'. Expected floor-even or voxel").into()),
+    }
+}
+
+#[cfg(feature = "metal")]
 fn normalized_metal_quality(cli: &Cli) -> &'static str {
     match cli.metal_quality.as_deref() {
         Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
@@ -349,6 +366,7 @@ fn normalized_metal_quality(cli: &Cli) -> &'static str {
 #[cfg(feature = "metal")]
 fn validate_metal_lod_cli(cli: &Cli) -> AppResult<render::MetalLodMode> {
     let mode = parse_metal_lod_mode(&cli.metal_lod)?;
+    parse_metal_lod_order(&cli.metal_lod_order)?;
     match mode {
         render::MetalLodMode::Off => {
             if let Some(value) = cli.metal_lod_splat_count {
@@ -524,6 +542,7 @@ fn run_render_probe(cli: &Cli, out_dir: PathBuf) -> AppResult<()> {
     #[cfg(feature = "metal")]
     {
         config.metal_lod_mode = validate_metal_lod_cli(cli)?;
+        config.metal_lod_order = parse_metal_lod_order(&cli.metal_lod_order)?;
         config.metal_lod_requested_splat_count = cli.metal_lod_splat_count;
     }
 
@@ -710,6 +729,8 @@ fn main() -> AppResult<()> {
     apply_kitty_transport_overrides(&cli)?;
     #[cfg(feature = "metal")]
     let metal_lod_mode = validate_metal_lod_cli(&cli)?;
+    #[cfg(feature = "metal")]
+    let metal_lod_order = parse_metal_lod_order(&cli.metal_lod_order)?;
 
     #[cfg(feature = "metal")]
     let mut backend = if cli.cpu {
@@ -740,6 +761,14 @@ fn main() -> AppResult<()> {
             }
         }
     }
+    #[cfg(feature = "metal")]
+    let metal_lod_indices = render::lod::build_metal_lod_indices(
+        &splats,
+        metal_lod_mode,
+        metal_lod_order,
+        metal_active_splat_count,
+    )
+    .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
 
     let use_truecolor = match std::env::var("COLORTERM") {
         Ok(val) => !val.is_empty() && (val == "truecolor" || val == "24bit"),
@@ -770,6 +799,7 @@ fn main() -> AppResult<()> {
         match render::metal::MetalBackend::new(splats.len()) {
             Ok(mut mb) => {
                 mb.upload_splats(&splats)?;
+                mb.upload_lod_indices(&metal_lod_indices)?;
                 Some(mb)
             }
             Err(err) => {
@@ -833,6 +863,8 @@ fn main() -> AppResult<()> {
         metal_lod_requested_splat_count,
         #[cfg(feature = "metal")]
         metal_active_splat_count,
+        #[cfg(feature = "metal")]
+        metal_lod_order,
         #[cfg(feature = "metal")]
         kitty_image_id: 1,
         #[cfg(feature = "metal")]

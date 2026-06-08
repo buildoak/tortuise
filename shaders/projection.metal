@@ -212,14 +212,14 @@ kernel void project_splats(
     constant uint& fast_quality [[buffer(7)]],
     constant float& fast_alpha_cutoff [[buffer(8)]],
     constant uint& source_splat_count [[buffer(9)]],
+    constant uint* lod_indices [[buffer(10)]],
     uint index [[thread_position_in_grid]]
 ) {
     if (index >= active_splat_count || source_splat_count == 0u || active_splat_count == 0u) {
         return;
     }
 
-    const ulong mapped = (ulong(index) * ulong(source_splat_count)) / ulong(active_splat_count);
-    const uint source_index = uint(min(mapped, ulong(source_splat_count - 1u)));
+    const uint source_index = min(lod_indices[index], source_splat_count - 1u);
     SplatData splat = splats[source_index];
 
     // World to view transformation

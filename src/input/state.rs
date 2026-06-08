@@ -84,6 +84,8 @@ mod tests {
             #[cfg(feature = "metal")]
             metal_active_splat_count: 0,
             #[cfg(feature = "metal")]
+            metal_lod_order: crate::render::MetalLodOrder::FloorEven,
+            #[cfg(feature = "metal")]
             kitty_image_id: 1,
             #[cfg(feature = "metal")]
             kitty_visible_image_id: 0,

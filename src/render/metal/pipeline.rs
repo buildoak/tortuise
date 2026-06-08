@@ -75,6 +75,14 @@ impl MetalBackend {
                 .checked_mul(mem::size_of::<GpuSplatData>())
                 .ok_or_else(|| MetalRenderError::Other("splat buffer size overflow".to_string()))?,
         );
+        let lod_indices_buffer = new_shared_buffer(
+            &device,
+            max_splats
+                .checked_mul(mem::size_of::<u32>())
+                .ok_or_else(|| {
+                    MetalRenderError::Other("LoD index buffer size overflow".to_string())
+                })?,
+        );
         let projected_buffer = new_private_buffer(
             &device,
             max_splats
@@ -121,6 +129,7 @@ impl MetalBackend {
             rasterize_tiles_pipeline,
             downsample_halfblock_pipeline,
             splat_buffer,
+            lod_indices_buffer,
             camera_buffer,
             valid_count_buffer,
             total_overlaps_buffer,
@@ -216,8 +225,31 @@ impl MetalBackend {
                 *contents.add(i) = gpu;
             }
         }
+        let lod_contents = self.lod_indices_buffer.contents() as *mut u32;
+        for i in 0..splats.len() {
+            unsafe {
+                *lod_contents.add(i) = i as u32;
+            }
+        }
 
         self.splats_uploaded = true;
+        Ok(())
+    }
+
+    pub fn upload_lod_indices(&mut self, indices: &[u32]) -> Result<(), MetalRenderError> {
+        if indices.len() > self.max_splats {
+            return Err("Too many LoD indices for GPU buffer".into());
+        }
+
+        let contents = self.lod_indices_buffer.contents() as *mut u32;
+        for (i, index) in indices.iter().copied().enumerate() {
+            if index as usize >= self.max_splats {
+                return Err("LoD index points past uploaded splat buffer".into());
+            }
+            unsafe {
+                *contents.add(i) = index;
+            }
+        }
         Ok(())
     }
 
