@@ -392,6 +392,7 @@ fn apply_live_preset(cli: &mut Cli) -> AppResult<()> {
             cli.metal_lod = "fixed".to_string();
             cli.metal_lod_splat_count = Some(2_100_000);
             cli.metal_lod_order = "voxel".to_string();
+            cli.flip_y = true;
             if cli.camera_pos.is_none() {
                 cli.camera_pos = Some("0,0,0.5".to_string());
             }
@@ -1144,6 +1145,7 @@ mod tests {
         assert_eq!(cli.metal_lod, "fixed");
         assert_eq!(cli.metal_lod_splat_count, Some(2_100_000));
         assert_eq!(cli.metal_lod_order, "voxel");
+        assert!(cli.flip_y);
         assert_eq!(cli.camera_pos.as_deref(), Some("0,0,0.5"));
         validate_metal_lod_cli(&cli).unwrap();
     }

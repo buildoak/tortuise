@@ -20,7 +20,7 @@ cargo run --features metal --release -- "$SCENE" --live-preset macbook-neo
 
 This expands to Kitty RGB transport, 33ms Kitty frame pacing, turbo Metal,
 fixed voxel LoD, 2.1M active splats, alpha cutoff `0.00001`, tile budget
-`131072`, and the Bee-tested starting camera `0,0,0.5`.
+`131072`, Bee's Y flip, and the Bee-tested starting camera `0,0,0.5`.
 
 Transport/quality knobs:
 
