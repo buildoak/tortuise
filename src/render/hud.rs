@@ -7,6 +7,19 @@ use std::io::{self, Write};
 
 use super::{make_color, AppState, RenderMode};
 
+fn effective_render_path(app_state: &AppState) -> &'static str {
+    match app_state.render_mode {
+        RenderMode::Halfblock => app_state.backend.name(),
+        #[cfg(feature = "metal")]
+        RenderMode::Kitty => app_state.backend.name(),
+        RenderMode::PointCloud
+        | RenderMode::Matrix
+        | RenderMode::BlockDensity
+        | RenderMode::Braille
+        | RenderMode::AsciiClassic => "CPU",
+    }
+}
+
 fn truncate_and_pad_in_place(text: &mut String, width: usize) {
     if width == 0 {
         text.clear();
@@ -42,11 +55,12 @@ pub fn draw_hud(
     let width = cols as usize;
     let term_cols = cols as usize;
     let term_rows = rows as usize;
+    let render_path = effective_render_path(app_state);
     let hud = &mut app_state.hud_string_buf;
     hud.clear();
     write!(
         hud,
-        "FPS:{:>5.1}  Splats:{}/{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Backend:{}  SS:",
+        "FPS:{:>5.1}  Splats:{}/{}  Pos:({:>6.2},{:>6.2},{:>6.2})  Speed:{:.2}  Cam:{}  Mode:{}  Render:{}  SS:",
         app_state.fps,
         app_state.visible_splat_count,
         app_state.splats.len(),
@@ -56,7 +70,7 @@ pub fn draw_hud(
         app_state.move_speed,
         app_state.camera_mode.name(),
         app_state.render_mode.name(),
-        app_state.backend.name()
+        render_path
     )
     .map_err(|_| io::Error::other("failed to format HUD"))?;
 

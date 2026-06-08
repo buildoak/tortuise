@@ -255,6 +255,8 @@ pub struct AppState {
     #[cfg(feature = "metal")]
     pub kitty_image_id: u32,
     #[cfg(feature = "metal")]
+    pub kitty_visible_image_id: u32,
+    #[cfg(feature = "metal")]
     pub kitty_payload_bytes: usize,
     #[cfg(feature = "metal")]
     pub kitty_base64_bytes: usize,

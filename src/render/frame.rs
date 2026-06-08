@@ -43,7 +43,10 @@ pub fn render_frame(
 
     #[cfg(feature = "metal")]
     if app_state.render_mode != RenderMode::Kitty && app_state.kitty_payload_bytes > 0 {
-        super::frame_kitty::delete_kitty_image(stdout, app_state.kitty_image_id)?;
+        super::frame_kitty::delete_kitty_image(stdout, 1)?;
+        super::frame_kitty::delete_kitty_image(stdout, 2)?;
+        app_state.kitty_image_id = 1;
+        app_state.kitty_visible_image_id = 0;
         app_state.kitty_payload_bytes = 0;
         app_state.kitty_base64_bytes = 0;
         app_state.kitty_chunks = 0;

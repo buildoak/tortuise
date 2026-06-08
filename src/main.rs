@@ -712,6 +712,8 @@ fn main() -> AppResult<()> {
         #[cfg(feature = "metal")]
         kitty_image_id: 1,
         #[cfg(feature = "metal")]
+        kitty_visible_image_id: 0,
+        #[cfg(feature = "metal")]
         kitty_payload_bytes: 0,
         #[cfg(feature = "metal")]
         kitty_base64_bytes: 0,

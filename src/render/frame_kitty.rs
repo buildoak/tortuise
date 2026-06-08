@@ -374,6 +374,10 @@ pub fn delete_kitty_image(stdout: &mut impl Write, image_id: u32) -> io::Result<
     write!(stdout, "\x1b_Ga=d,d=i,i={image_id},q=2\x1b\\")
 }
 
+fn next_kitty_image_id(image_id: u32) -> u32 {
+    if image_id == 1 { 2 } else { 1 }
+}
+
 #[cfg_attr(not(feature = "metal"), allow(dead_code))]
 fn kitty_payload_format_from_env() -> KittyPayloadFormat {
     std::env::var("TORTUISE_KITTY_FORMAT")
@@ -473,10 +477,12 @@ pub fn render_kitty_frame(
     }
 
     let write_start = Instant::now();
+    let image_id = app_state.kitty_image_id;
+    let previous_image_id = app_state.kitty_visible_image_id;
     queue!(stdout, cursor::MoveTo(0, image_start_row as u16))?;
     let (base64_bytes, chunks) = write_kitty_rgba_direct(
         stdout,
-        app_state.kitty_image_id,
+        image_id,
         width,
         height,
         term_cols,
@@ -484,6 +490,11 @@ pub fn render_kitty_frame(
         format,
         &payload,
     )?;
+    if previous_image_id != 0 && previous_image_id != image_id {
+        delete_kitty_image(stdout, previous_image_id)?;
+    }
+    app_state.kitty_visible_image_id = image_id;
+    app_state.kitty_image_id = next_kitty_image_id(image_id);
     app_state.kitty_payload_bytes = payload.len();
     app_state.kitty_base64_bytes = base64_bytes;
     app_state.kitty_chunks = chunks;
@@ -539,6 +550,13 @@ mod tests {
         let mut out = Vec::new();
         delete_kitty_image(&mut out, 7).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "\x1b_Ga=d,d=i,i=7,q=2\x1b\\");
+    }
+
+    #[test]
+    fn kitty_image_ids_alternate_between_two_slots() {
+        assert_eq!(next_kitty_image_id(1), 2);
+        assert_eq!(next_kitty_image_id(2), 1);
+        assert_eq!(next_kitty_image_id(99), 1);
     }
 
     #[test]
