@@ -180,9 +180,10 @@ Implemented first fast tier:
 - `--metal-fast-alpha-cutoff N` tunes the fast-preview peak alpha cutoff; the
   default is `0.01`. Lower values keep fainter splats such as Bee wings, but
   increase Metal work and can move a scene closer to the timeout cliff.
-- `TORTUISE_METAL_FAST_TILE_BUDGET` caps front-to-back raster work per tile in
-  fast-preview; the default is `16384`. This is the first budgeted-compositor
-  primitive and must stay approximate-only.
+- `--metal-fast-tile-budget N` caps front-to-back raster work per tile in
+  fast-preview; the default is `16384`. Raising it can reduce clipping or
+  rectangle-like artifacts, but costs more GPU time. This is the first
+  budgeted-compositor primitive and must stay approximate-only.
 - `--splat-budget N` deterministically keeps at most `N` evenly spaced source
   splats before upload/render. This is active-set/LoD groundwork rather than a
   finished quality LoD, but it lets benchmarks test fixed-budget behavior on

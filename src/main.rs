@@ -182,6 +182,13 @@ struct Cli {
         help = "Fast-preview alpha cutoff; lower values keep fainter splats at higher cost"
     )]
     metal_fast_alpha_cutoff: Option<f32>,
+    #[cfg(feature = "metal")]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Fast-preview per-tile raster budget; higher values reduce clipping artifacts at higher cost"
+    )]
+    metal_fast_tile_budget: Option<usize>,
     #[arg(long, help = "Flip Y axis")]
     flip_y: bool,
     #[arg(long, help = "Flip Z axis")]
@@ -494,6 +501,12 @@ fn apply_metal_quality_override(cli: &Cli) -> AppResult<()> {
             return Err("--metal-fast-alpha-cutoff must be a finite value >= 0".into());
         }
         std::env::set_var("TORTUISE_METAL_FAST_ALPHA_CUTOFF", value.to_string());
+    }
+    if let Some(value) = cli.metal_fast_tile_budget {
+        if value == 0 {
+            return Err("--metal-fast-tile-budget must be greater than 0".into());
+        }
+        std::env::set_var("TORTUISE_METAL_FAST_TILE_BUDGET", value.to_string());
     }
     Ok(())
 }
@@ -848,6 +861,11 @@ mod tests {
         cli.metal_fast_alpha_cutoff = Some(-1.0);
         let err = apply_metal_quality_override(&cli).unwrap_err();
         assert!(err.to_string().contains("--metal-fast-alpha-cutoff"));
+
+        cli.metal_fast_alpha_cutoff = None;
+        cli.metal_fast_tile_budget = Some(0);
+        let err = apply_metal_quality_override(&cli).unwrap_err();
+        assert!(err.to_string().contains("--metal-fast-tile-budget"));
     }
 
     #[cfg(feature = "metal")]
