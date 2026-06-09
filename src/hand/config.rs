@@ -92,6 +92,7 @@ impl HandConfig {
         if !sensitivity.is_finite() || sensitivity <= 0.0 || sensitivity > 20.0 {
             return Err("--hand-sensitivity must be finite and in 0..=20".into());
         }
+        let camera_preview = camera_preview || backend == HandBackend::AppleVision;
         let camera_preview_scale = camera_preview_scale.unwrap_or(0.15);
         if !camera_preview_scale.is_finite() || !(0.05..=0.50).contains(&camera_preview_scale) {
             return Err("--camera-preview-scale must be finite and in 0.05..=0.50".into());

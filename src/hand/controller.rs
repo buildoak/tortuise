@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::types::HandPoseFrame;
+use super::types::{HandPoseFrame, TrackedHand};
 
 const PINCH_ENTER: f32 = 0.72;
 const PINCH_EXIT: f32 = 0.58;
@@ -14,6 +14,10 @@ pub struct HandControlOutput {
     pub age_ms: f64,
     pub yaw_delta: f32,
     pub pitch_delta: f32,
+    pub pan_x_delta: f32,
+    pub pan_y_delta: f32,
+    pub zoom_delta: f32,
+    pub roll_delta: f32,
 }
 
 impl HandControlOutput {
@@ -24,6 +28,10 @@ impl HandControlOutput {
             age_ms,
             yaw_delta: 0.0,
             pitch_delta: 0.0,
+            pan_x_delta: 0.0,
+            pan_y_delta: 0.0,
+            zoom_delta: 0.0,
+            roll_delta: 0.0,
         }
     }
 }
@@ -34,6 +42,10 @@ pub struct GestureController {
     sensitivity: f32,
     engaged: bool,
     last_position: Option<(f32, f32)>,
+    two_hand_engaged: bool,
+    last_two_center: Option<(f32, f32)>,
+    last_two_distance: Option<f32>,
+    last_two_angle: Option<f32>,
 }
 
 impl GestureController {
@@ -43,12 +55,20 @@ impl GestureController {
             sensitivity,
             engaged: false,
             last_position: None,
+            two_hand_engaged: false,
+            last_two_center: None,
+            last_two_distance: None,
+            last_two_angle: None,
         }
     }
 
     pub fn reset(&mut self) {
         self.engaged = false;
         self.last_position = None;
+        self.two_hand_engaged = false;
+        self.last_two_center = None;
+        self.last_two_distance = None;
+        self.last_two_angle = None;
     }
 
     pub fn observe(&mut self, frame: &HandPoseFrame, now: Instant) -> HandControlOutput {
@@ -58,6 +78,29 @@ impl GestureController {
             self.reset();
             return HandControlOutput::idle(age_ms, true);
         }
+
+        let mut pinched = frame
+            .hands
+            .iter()
+            .filter(|hand| hand.confidence >= 0.25)
+            .filter(|hand| {
+                if self.two_hand_engaged {
+                    hand.pinch >= PINCH_EXIT
+                } else {
+                    hand.pinch >= PINCH_ENTER
+                }
+            })
+            .collect::<Vec<_>>();
+        pinched.sort_by(|a, b| b.confidence.total_cmp(&a.confidence));
+        if pinched.len() >= 2 {
+            self.engaged = false;
+            self.last_position = None;
+            return self.observe_two_hand(pinched[0], pinched[1], age_ms);
+        }
+        self.two_hand_engaged = false;
+        self.last_two_center = None;
+        self.last_two_distance = None;
+        self.last_two_angle = None;
 
         let Some(hand) = frame
             .hands
@@ -83,6 +126,10 @@ impl GestureController {
                 age_ms,
                 yaw_delta: 0.0,
                 pitch_delta: 0.0,
+                pan_x_delta: 0.0,
+                pan_y_delta: 0.0,
+                zoom_delta: 0.0,
+                roll_delta: 0.0,
             };
         } else {
             self.last_position = Some((hand.x, hand.y));
@@ -100,6 +147,60 @@ impl GestureController {
             age_ms,
             yaw_delta,
             pitch_delta,
+            pan_x_delta: 0.0,
+            pan_y_delta: 0.0,
+            zoom_delta: 0.0,
+            roll_delta: 0.0,
+        }
+    }
+
+    fn observe_two_hand(
+        &mut self,
+        first: &TrackedHand,
+        second: &TrackedHand,
+        age_ms: f64,
+    ) -> HandControlOutput {
+        let center = ((first.x + second.x) * 0.5, (first.y + second.y) * 0.5);
+        let dx = second.x - first.x;
+        let dy = second.y - first.y;
+        let distance = (dx * dx + dy * dy).sqrt();
+        let angle = dy.atan2(dx);
+
+        if !self.two_hand_engaged {
+            self.two_hand_engaged = true;
+            self.last_two_center = Some(center);
+            self.last_two_distance = Some(distance);
+            self.last_two_angle = Some(angle);
+            return HandControlOutput {
+                engaged: true,
+                stale: false,
+                age_ms,
+                yaw_delta: 0.0,
+                pitch_delta: 0.0,
+                pan_x_delta: 0.0,
+                pan_y_delta: 0.0,
+                zoom_delta: 0.0,
+                roll_delta: 0.0,
+            };
+        }
+
+        let last_center = self.last_two_center.unwrap_or(center);
+        let last_distance = self.last_two_distance.unwrap_or(distance);
+        let last_angle = self.last_two_angle.unwrap_or(angle);
+        self.last_two_center = Some(center);
+        self.last_two_distance = Some(distance);
+        self.last_two_angle = Some(angle);
+
+        HandControlOutput {
+            engaged: true,
+            stale: false,
+            age_ms,
+            yaw_delta: 0.0,
+            pitch_delta: 0.0,
+            pan_x_delta: shape_delta((center.0 - last_center.0) * self.sensitivity),
+            pan_y_delta: shape_delta((center.1 - last_center.1) * self.sensitivity),
+            zoom_delta: shape_delta((distance - last_distance) * self.sensitivity),
+            roll_delta: shape_delta(wrap_angle_delta(angle - last_angle) * self.sensitivity),
         }
     }
 }
@@ -110,6 +211,12 @@ fn shape_delta(delta: f32) -> f32 {
     } else {
         delta.clamp(-DELTA_CAP, DELTA_CAP)
     }
+}
+
+fn wrap_angle_delta(delta: f32) -> f32 {
+    let wrapped =
+        (delta + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+    wrapped / std::f32::consts::PI
 }
 
 #[cfg(test)]
@@ -178,5 +285,40 @@ mod tests {
         let large = controller.observe(&frame(now, 0.9, 0.9, 0.1), now);
         assert_eq!(large.yaw_delta, DELTA_CAP);
         assert_eq!(large.pitch_delta, -DELTA_CAP);
+    }
+
+    #[test]
+    fn two_pinched_hands_emit_zoom_and_pan_without_yaw() {
+        let now = Instant::now();
+        let mut controller = GestureController::new(Duration::from_millis(200), 2.0);
+        let make = |left_x, right_x, y| HandPoseFrame {
+            sequence: 1,
+            captured_at: now,
+            detect_ms: 3.0,
+            hands: vec![
+                TrackedHand {
+                    id: 0,
+                    x: left_x,
+                    y,
+                    pinch: 0.9,
+                    confidence: 0.95,
+                },
+                TrackedHand {
+                    id: 1,
+                    x: right_x,
+                    y,
+                    pinch: 0.9,
+                    confidence: 0.95,
+                },
+            ],
+        };
+
+        controller.observe(&make(0.35, 0.65, 0.5), now);
+        let output = controller.observe(&make(0.30, 0.75, 0.55), now);
+        assert!(output.engaged);
+        assert_eq!(output.yaw_delta, 0.0);
+        assert!(output.zoom_delta > 0.0);
+        assert!(output.pan_x_delta > 0.0);
+        assert!(output.pan_y_delta > 0.0);
     }
 }

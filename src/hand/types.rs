@@ -121,6 +121,10 @@ pub struct HandControlState {
     pub applied_this_frame: bool,
     pub yaw_delta: f32,
     pub pitch_delta: f32,
+    pub pan_x_delta: f32,
+    pub pan_y_delta: f32,
+    pub zoom_delta: f32,
+    pub roll_delta: f32,
     pub control_age_ms: f64,
     pub detect_ewma_ms: f64,
     pub last_drain: HandDrainStats,
@@ -156,6 +160,10 @@ impl HandControlState {
             applied_this_frame: false,
             yaw_delta: 0.0,
             pitch_delta: 0.0,
+            pan_x_delta: 0.0,
+            pan_y_delta: 0.0,
+            zoom_delta: 0.0,
+            roll_delta: 0.0,
             control_age_ms: 0.0,
             detect_ewma_ms: 0.0,
             last_drain: HandDrainStats::default(),
@@ -179,6 +187,10 @@ impl HandControlState {
         self.applied_this_frame = false;
         self.yaw_delta = 0.0;
         self.pitch_delta = 0.0;
+        self.pan_x_delta = 0.0;
+        self.pan_y_delta = 0.0;
+        self.zoom_delta = 0.0;
+        self.roll_delta = 0.0;
         self.control_age_ms = 0.0;
         self.latest_hands.clear();
         self.controller.reset();
@@ -203,6 +215,10 @@ impl HandControlState {
         self.applied_this_frame = false;
         self.yaw_delta = output.yaw_delta;
         self.pitch_delta = output.pitch_delta;
+        self.pan_x_delta = output.pan_x_delta;
+        self.pan_y_delta = output.pan_y_delta;
+        self.zoom_delta = output.zoom_delta;
+        self.roll_delta = output.roll_delta;
         self.control_age_ms = output.age_ms;
         stats.sample_latency_ms = output.age_ms;
         stats.detect_ms = frame.detect_ms as f64;

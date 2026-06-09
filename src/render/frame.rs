@@ -23,7 +23,13 @@ fn kitty_frame_target() -> std::time::Duration {
 
 fn update_orbit(app_state: &mut AppState, delta_time: f32) {
     let orbit_speed = 0.9 * app_state.move_speed;
-    app_state.orbit_angle += orbit_speed * delta_time;
+    #[cfg(feature = "hands")]
+    let hands_drive_orbit = app_state.hand_control.enabled && !app_state.hand_control.debug;
+    #[cfg(not(feature = "hands"))]
+    let hands_drive_orbit = false;
+    if !hands_drive_orbit {
+        app_state.orbit_angle += orbit_speed * delta_time;
+    }
 
     let target = app_state.orbit_target;
     app_state.camera.position.x = target.x + app_state.orbit_radius * app_state.orbit_angle.cos();
@@ -44,20 +50,36 @@ fn apply_hand_control(app_state: &mut AppState) {
         return;
     }
 
-    if app_state.camera_mode != CameraMode::Orbit {
-        return;
-    }
-
     let yaw = app_state.hand_control.yaw_delta;
     let pitch = app_state.hand_control.pitch_delta;
-    if yaw == 0.0 && pitch == 0.0 {
+    let pan_x = app_state.hand_control.pan_x_delta;
+    let pan_y = app_state.hand_control.pan_y_delta;
+    let zoom = app_state.hand_control.zoom_delta;
+    let roll = app_state.hand_control.roll_delta;
+    if yaw == 0.0 && pitch == 0.0 && pan_x == 0.0 && pan_y == 0.0 && zoom == 0.0 && roll == 0.0 {
         return;
     }
 
-    app_state.orbit_angle += yaw * 3.0;
-    let height_limit = (app_state.orbit_radius * 0.9).max(0.25);
-    app_state.orbit_height =
-        (app_state.orbit_height + pitch * 2.0).clamp(-height_limit, height_limit);
+    match app_state.camera_mode {
+        CameraMode::Orbit => {
+            app_state.orbit_angle += yaw * 3.0 + roll * 1.4;
+            app_state.orbit_radius =
+                (app_state.orbit_radius * (1.0 - zoom * 2.0)).clamp(0.05, 100.0);
+            let height_limit = (app_state.orbit_radius * 0.9).max(0.25);
+            app_state.orbit_height =
+                (app_state.orbit_height + pitch * 2.0).clamp(-height_limit, height_limit);
+            let pan_scale = app_state.orbit_radius.max(0.5) * 1.2;
+            app_state.orbit_target -= app_state.camera.right * pan_x * pan_scale;
+            app_state.orbit_target.y += pan_y * pan_scale;
+        }
+        CameraMode::Free => {
+            crate::camera::adjust_yaw(&mut app_state.camera, yaw * 2.0 + roll * 0.8);
+            crate::camera::adjust_pitch(&mut app_state.camera, pitch * 1.5);
+            crate::camera::move_right(&mut app_state.camera, pan_x * app_state.move_speed * 6.0);
+            crate::camera::move_up(&mut app_state.camera, pan_y * app_state.move_speed * 6.0);
+            crate::camera::move_forward(&mut app_state.camera, zoom * app_state.move_speed * 10.0);
+        }
+    }
     app_state.hand_control.applied_this_frame = true;
 }
 

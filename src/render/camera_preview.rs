@@ -1,6 +1,6 @@
 use crossterm::{
     cursor, queue,
-    style::{ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
 use std::io::{self, Write};
 
@@ -93,6 +93,9 @@ pub fn draw_camera_preview(
         return Ok(());
     }
     let Some(frame) = app_state.hand_control.latest_preview.as_ref() else {
+        if let Some(rect) = preview_rect(cols, rows, app_state.hand_control.camera_preview_scale) {
+            draw_placeholder(app_state, rect, stdout)?;
+        }
         return Ok(());
     };
     if frame.width == 0 || frame.height == 0 || frame.rgb.len() < frame.width * frame.height * 3 {
@@ -121,6 +124,41 @@ pub fn draw_camera_preview(
         }
     }
     queue!(stdout, ResetColor)?;
+    Ok(())
+}
+
+fn draw_placeholder(
+    app_state: &AppState,
+    rect: PreviewRect,
+    stdout: &mut impl Write,
+) -> io::Result<()> {
+    let tc = app_state.use_truecolor;
+    for row in 0..rect.rows {
+        queue!(stdout, cursor::MoveTo(rect.x, rect.y + row))?;
+        for _ in 0..rect.cols {
+            queue!(
+                stdout,
+                SetBackgroundColor(make_color(18, 22, 28, tc)),
+                SetForegroundColor(make_color(18, 22, 28, tc)),
+                Print(" ")
+            )?;
+        }
+    }
+
+    let label = match app_state.hand_control.status {
+        crate::hand::types::HandStatus::Error(code) => code,
+        _ => "camera...",
+    };
+    let max_len = rect.cols.saturating_sub(2) as usize;
+    let text = &label[..label.len().min(max_len)];
+    queue!(
+        stdout,
+        cursor::MoveTo(rect.x + 1, rect.y + rect.rows / 2),
+        SetBackgroundColor(make_color(18, 22, 28, tc)),
+        SetForegroundColor(make_color(210, 220, 235, tc)),
+        Print(text),
+        ResetColor
+    )?;
     Ok(())
 }
 
