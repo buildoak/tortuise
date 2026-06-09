@@ -14,15 +14,15 @@ impl ReplayHandSource {
 
     pub fn next_frame(&mut self, now: Instant) -> HandPoseFrame {
         self.sequence += 1;
-        let t = self.sequence as f32 * 0.08;
+        let t = self.sequence as f32 * 0.16;
         HandPoseFrame {
             sequence: self.sequence,
             captured_at: now,
             detect_ms: 2.5,
             hands: vec![TrackedHand {
                 id: 0,
-                x: 0.5 + 0.18 * t.sin(),
-                y: 0.5 + 0.12 * (t * 0.7).cos(),
+                x: 0.5 + 0.25 * t.sin(),
+                y: 0.5 + 0.18 * (t * 0.7).cos(),
                 pinch: 0.82,
                 confidence: 0.95,
             }],

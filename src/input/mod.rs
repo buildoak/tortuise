@@ -181,6 +181,12 @@ pub fn handle_input_event(app_state: &mut AppState, event: Event) -> AppResult<(
                             app_state.render_mode = app_state.render_mode.next();
                         }
                     }
+                    'h' => {
+                        #[cfg(feature = "hands")]
+                        {
+                            app_state.hand_control.toggle_enabled();
+                        }
+                    }
                     'z' => {
                         camera::reset(&mut app_state.camera, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
                         app_state.camera_mode = CameraMode::Free;
@@ -392,6 +398,40 @@ mod tests {
         )
         .expect("mode key");
         assert_eq!(app.render_mode, RenderMode::Kitty);
+    }
+
+    #[cfg(feature = "hands")]
+    #[test]
+    fn hands_key_toggles_hand_control_state() {
+        let mut app = make_state();
+        app.hand_control = crate::hand::HandControlState::new(crate::hand::HandConfig {
+            enabled: true,
+            backend: crate::hand::HandBackend::Replay,
+            debug: false,
+            target_fps: 30,
+            timeout_ms: 200,
+            sensitivity: 1.0,
+        });
+
+        handle_input_event(
+            &mut app,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        )
+        .expect("hands toggle");
+        assert!(!app.hand_control.enabled);
+
+        handle_input_event(
+            &mut app,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        )
+        .expect("hands toggle");
+        assert!(app.hand_control.enabled);
     }
 
     #[test]

@@ -109,6 +109,8 @@ pub struct HandControlState {
     pub pinched_hands: usize,
     pub engaged: bool,
     pub applied_this_frame: bool,
+    pub yaw_delta: f32,
+    pub pitch_delta: f32,
     pub control_age_ms: f64,
     pub detect_ewma_ms: f64,
     pub last_drain: HandDrainStats,
@@ -137,6 +139,8 @@ impl HandControlState {
             pinched_hands: 0,
             engaged: false,
             applied_this_frame: false,
+            yaw_delta: 0.0,
+            pitch_delta: 0.0,
             control_age_ms: 0.0,
             detect_ewma_ms: 0.0,
             last_drain: HandDrainStats::default(),
@@ -153,8 +157,20 @@ impl HandControlState {
         self.pinched_hands = 0;
         self.engaged = false;
         self.applied_this_frame = false;
+        self.yaw_delta = 0.0;
+        self.pitch_delta = 0.0;
         self.control_age_ms = 0.0;
         self.controller.reset();
+    }
+
+    pub fn toggle_enabled(&mut self) {
+        if self.enabled {
+            self.enabled = false;
+            self.reset_tracking(HandStatus::Off);
+        } else {
+            self.enabled = true;
+            self.status = HandStatus::Idle;
+        }
     }
 
     pub fn observe(&mut self, frame: &HandPoseFrame, now: Instant, mut stats: HandDrainStats) {
@@ -163,6 +179,8 @@ impl HandControlState {
         self.pinched_hands = frame.pinched_count();
         self.engaged = output.engaged;
         self.applied_this_frame = false;
+        self.yaw_delta = output.yaw_delta;
+        self.pitch_delta = output.pitch_delta;
         self.control_age_ms = output.age_ms;
         stats.sample_latency_ms = output.age_ms;
         stats.detect_ms = frame.detect_ms as f64;

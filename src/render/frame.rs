@@ -33,6 +33,34 @@ fn update_orbit(app_state: &mut AppState, delta_time: f32) {
     crate::camera::look_at_target(&mut app_state.camera, target);
 }
 
+#[cfg(feature = "hands")]
+fn apply_hand_control(app_state: &mut AppState) {
+    app_state.hand_control.applied_this_frame = false;
+    if !app_state.hand_control.enabled
+        || app_state.hand_control.debug
+        || !app_state.hand_control.engaged
+        || app_state.hand_control.status == crate::hand::types::HandStatus::Stale
+    {
+        return;
+    }
+
+    if app_state.camera_mode != CameraMode::Orbit {
+        return;
+    }
+
+    let yaw = app_state.hand_control.yaw_delta;
+    let pitch = app_state.hand_control.pitch_delta;
+    if yaw == 0.0 && pitch == 0.0 {
+        return;
+    }
+
+    app_state.orbit_angle += yaw * 3.0;
+    let height_limit = (app_state.orbit_radius * 0.9).max(0.25);
+    app_state.orbit_height =
+        (app_state.orbit_height + pitch * 2.0).clamp(-height_limit, height_limit);
+    app_state.hand_control.applied_this_frame = true;
+}
+
 fn duration_ms(duration: std::time::Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
@@ -339,6 +367,9 @@ pub fn run_app_loop(
             .as_secs_f32()
             .max(1e-6);
         app_state.last_frame_time = now;
+
+        #[cfg(feature = "hands")]
+        apply_hand_control(app_state);
 
         match app_state.camera_mode {
             CameraMode::Orbit => update_orbit(app_state, delta_time),
