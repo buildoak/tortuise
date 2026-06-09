@@ -84,6 +84,7 @@ mod tests {
             render_mode: RenderMode::Halfblock,
             #[cfg(feature = "metal")]
             kitty_cycle_enabled: false,
+            hand_control: crate::hand::HandControlState::disabled(),
             backend: Backend::Cpu,
             use_truecolor: false,
             #[cfg(feature = "metal")]

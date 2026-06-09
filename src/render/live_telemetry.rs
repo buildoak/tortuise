@@ -1,3 +1,5 @@
+#[cfg(feature = "hands")]
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -55,12 +57,61 @@ pub struct LiveFrameTelemetry {
     pub p99_tile_range: u32,
     pub stage_timing_count: usize,
     pub previous_telemetry_write_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_enabled: bool,
+    #[cfg(feature = "hands")]
+    pub hand_available: bool,
+    #[cfg(feature = "hands")]
+    pub hand_backend: &'static str,
+    #[cfg(feature = "hands")]
+    pub hand_status: &'static str,
+    #[cfg(feature = "hands")]
+    pub hand_debug: bool,
+    #[cfg(feature = "hands")]
+    pub hand_applied_this_frame: bool,
+    #[cfg(feature = "hands")]
+    pub hand_control_age_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_hands_visible: usize,
+    #[cfg(feature = "hands")]
+    pub hand_pinched_hands: usize,
+    #[cfg(feature = "hands")]
+    pub hand_engaged: bool,
+    #[cfg(feature = "hands")]
+    pub hand_messages: usize,
+    #[cfg(feature = "hands")]
+    pub hand_samples: usize,
+    #[cfg(feature = "hands")]
+    pub hand_dropped_or_superseded: u64,
+    #[cfg(feature = "hands")]
+    pub hand_oldest_age_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_newest_age_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_drain_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_sample_latency_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_detect_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_detect_ewma_ms: f64,
+    #[cfg(feature = "hands")]
+    pub hand_target_fps: u32,
 }
 
 impl Default for LiveFrameTelemetry {
     fn default() -> Self {
         Self {
-            schema_version: 3,
+            schema_version: {
+                #[cfg(feature = "hands")]
+                {
+                    4
+                }
+                #[cfg(not(feature = "hands"))]
+                {
+                    3
+                }
+            },
             frame: 0,
             render_width: 0,
             render_height: 0,
@@ -111,6 +162,46 @@ impl Default for LiveFrameTelemetry {
             p99_tile_range: 0,
             stage_timing_count: 0,
             previous_telemetry_write_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_enabled: false,
+            #[cfg(feature = "hands")]
+            hand_available: false,
+            #[cfg(feature = "hands")]
+            hand_backend: "off",
+            #[cfg(feature = "hands")]
+            hand_status: "off",
+            #[cfg(feature = "hands")]
+            hand_debug: false,
+            #[cfg(feature = "hands")]
+            hand_applied_this_frame: false,
+            #[cfg(feature = "hands")]
+            hand_control_age_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_hands_visible: 0,
+            #[cfg(feature = "hands")]
+            hand_pinched_hands: 0,
+            #[cfg(feature = "hands")]
+            hand_engaged: false,
+            #[cfg(feature = "hands")]
+            hand_messages: 0,
+            #[cfg(feature = "hands")]
+            hand_samples: 0,
+            #[cfg(feature = "hands")]
+            hand_dropped_or_superseded: 0,
+            #[cfg(feature = "hands")]
+            hand_oldest_age_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_newest_age_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_drain_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_sample_latency_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_detect_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_detect_ewma_ms: 0.0,
+            #[cfg(feature = "hands")]
+            hand_target_fps: 0,
         }
     }
 }
@@ -155,8 +246,7 @@ impl LiveTelemetryState {
         let Some(writer) = self.writer.as_mut() else {
             return Ok(0.0);
         };
-        writeln!(
-            writer,
+        let mut line = format!(
             concat!(
                 "{{",
                 "\"schema_version\":{},",
@@ -209,8 +299,7 @@ impl LiveTelemetryState {
                 "\"p95_tile_range\":{},",
                 "\"p99_tile_range\":{},",
                 "\"stage_timing_count\":{},",
-                "\"previous_telemetry_write_ms\":{:.3}",
-                "}}"
+                "\"previous_telemetry_write_ms\":{:.3}"
             ),
             self.last.schema_version,
             self.last.frame,
@@ -263,7 +352,60 @@ impl LiveTelemetryState {
             self.last.p99_tile_range,
             self.last.stage_timing_count,
             self.last.previous_telemetry_write_ms
-        )?;
+        );
+        #[cfg(feature = "hands")]
+        {
+            write!(
+                &mut line,
+                concat!(
+                    ",\"hands\":{{",
+                    "\"enabled\":{},",
+                    "\"available\":{},",
+                    "\"backend\":\"{}\",",
+                    "\"status\":\"{}\",",
+                    "\"debug\":{},",
+                    "\"applied_this_frame\":{},",
+                    "\"control_age_ms\":{:.3},",
+                    "\"hands_visible\":{},",
+                    "\"pinched_hands\":{},",
+                    "\"engaged\":{},",
+                    "\"messages\":{},",
+                    "\"samples\":{},",
+                    "\"dropped_or_superseded\":{},",
+                    "\"oldest_age_ms\":{:.3},",
+                    "\"newest_age_ms\":{:.3},",
+                    "\"drain_ms\":{:.3},",
+                    "\"sample_latency_ms\":{:.3},",
+                    "\"detect_ms\":{:.3},",
+                    "\"detect_ewma_ms\":{:.3},",
+                    "\"target_fps\":{}",
+                    "}}"
+                ),
+                self.last.hand_enabled,
+                self.last.hand_available,
+                self.last.hand_backend,
+                self.last.hand_status,
+                self.last.hand_debug,
+                self.last.hand_applied_this_frame,
+                self.last.hand_control_age_ms,
+                self.last.hand_hands_visible,
+                self.last.hand_pinched_hands,
+                self.last.hand_engaged,
+                self.last.hand_messages,
+                self.last.hand_samples,
+                self.last.hand_dropped_or_superseded,
+                self.last.hand_oldest_age_ms,
+                self.last.hand_newest_age_ms,
+                self.last.hand_drain_ms,
+                self.last.hand_sample_latency_ms,
+                self.last.hand_detect_ms,
+                self.last.hand_detect_ewma_ms,
+                self.last.hand_target_fps
+            )
+            .map_err(|_| io::Error::other("failed to format hand telemetry"))?;
+        }
+        line.push('}');
+        writeln!(writer, "{line}")?;
         writer.flush()?;
         Ok(started.elapsed().as_secs_f64() * 1000.0)
     }
@@ -317,6 +459,9 @@ mod tests {
 
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
+        #[cfg(feature = "hands")]
+        assert!(text.contains("\"schema_version\":4"));
+        #[cfg(not(feature = "hands"))]
         assert!(text.contains("\"schema_version\":3"));
         assert!(text.contains("\"frame\":3"));
         assert!(text.contains("\"camera\""));
@@ -326,6 +471,8 @@ mod tests {
         assert!(text.contains("\"effective_path\":\"metal_kitty\""));
         assert!(text.contains("\"valid_count\":5"));
         assert!(text.contains("\"previous_telemetry_write_ms\":0.000"));
+        #[cfg(feature = "hands")]
+        assert!(text.contains("\"hands\""));
         assert!(text.ends_with('\n'));
     }
 }

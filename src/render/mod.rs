@@ -357,6 +357,7 @@ pub struct AppState {
     pub render_mode: RenderMode,
     #[cfg(feature = "metal")]
     pub kitty_cycle_enabled: bool,
+    pub hand_control: crate::hand::HandControlState,
     #[cfg_attr(not(feature = "metal"), allow(dead_code))]
     pub backend: Backend,
     pub use_truecolor: bool,

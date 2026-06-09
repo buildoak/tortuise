@@ -12,6 +12,7 @@ use std::time::Instant;
 
 mod camera;
 mod demo;
+mod hand;
 mod input;
 mod math;
 mod parser;
@@ -151,6 +152,28 @@ struct Cli {
         help = "Write opt-in live per-frame telemetry as JSONL"
     )]
     live_telemetry_jsonl: Option<PathBuf>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, help = "Enable WIP hand-control runtime")]
+    hands: bool,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(
+        long,
+        value_name = "off|replay|sidecar",
+        help = "WIP hand-control backend"
+    )]
+    hand_backend: Option<String>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, help = "Run hand runtime without mutating camera")]
+    hand_debug: bool,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, value_name = "N", help = "Hand runtime target FPS")]
+    hand_target_fps: Option<u32>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, value_name = "MS", help = "Hand sample stale timeout")]
+    hand_timeout_ms: Option<u64>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, value_name = "N", help = "Hand gesture sensitivity scalar")]
+    hand_sensitivity: Option<f32>,
     #[cfg(feature = "metal")]
     #[arg(
         long,
@@ -344,6 +367,41 @@ fn apply_splat_budget(splats: &mut Vec<splat::Splat>, budget: Option<usize>) -> 
     }
     *splats = selected;
     Ok(())
+}
+
+#[cfg_attr(feature = "hands", allow(dead_code))]
+fn hand_flags_requested(cli: &Cli) -> bool {
+    cli.hands
+        || cli.hand_backend.is_some()
+        || cli.hand_debug
+        || cli.hand_target_fps.is_some()
+        || cli.hand_timeout_ms.is_some()
+        || cli.hand_sensitivity.is_some()
+}
+
+#[cfg(not(feature = "hands"))]
+fn validate_hand_cli_supported(cli: &Cli) -> AppResult<()> {
+    if hand_flags_requested(cli) {
+        return Err("hand support was not compiled in; rebuild with --features hands".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "hands")]
+fn validate_hand_cli_supported(_cli: &Cli) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(feature = "hands")]
+fn hand_config_from_cli(cli: &Cli) -> AppResult<hand::HandConfig> {
+    hand::HandConfig::from_parts(
+        cli.hands,
+        cli.hand_backend.as_deref(),
+        cli.hand_debug,
+        cli.hand_target_fps,
+        cli.hand_timeout_ms,
+        cli.hand_sensitivity,
+    )
 }
 
 #[cfg(feature = "metal")]
@@ -750,6 +808,8 @@ fn main() -> AppResult<()> {
     #[cfg(feature = "metal")]
     let mut cli = cli;
 
+    validate_hand_cli_supported(&cli)?;
+
     if let Some(path) = cli.kitty_replay.clone() {
         return run_kitty_replay(&cli, path);
     }
@@ -775,6 +835,10 @@ fn main() -> AppResult<()> {
     let metal_lod_mode = validate_metal_lod_cli(&cli)?;
     #[cfg(feature = "metal")]
     let metal_lod_order = parse_metal_lod_order(&cli.metal_lod_order)?;
+    #[cfg(feature = "hands")]
+    let hand_config = hand_config_from_cli(&cli)?;
+    #[cfg(not(feature = "hands"))]
+    let hand_config = hand::HandConfig::disabled();
 
     #[cfg(feature = "metal")]
     let mut backend = if cli.cpu {
@@ -916,6 +980,7 @@ fn main() -> AppResult<()> {
         },
         #[cfg(feature = "metal")]
         kitty_cycle_enabled: cli.kitty,
+        hand_control: hand::HandControlState::new(hand_config.clone()),
         backend,
         use_truecolor,
         #[cfg(feature = "metal")]
@@ -955,6 +1020,21 @@ fn main() -> AppResult<()> {
         )?,
     };
 
+    let mut hand_runtime = {
+        #[cfg(feature = "hands")]
+        {
+            if hand_config.enabled {
+                Some(hand::HandRuntime::start(hand_config))
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "hands"))]
+        {
+            None
+        }
+    };
+
     crossterm::terminal::enable_raw_mode()?;
     let input_rx = input::thread::spawn_input_thread();
     let mut stdout = BufWriter::with_capacity(1024 * 1024, io::stdout());
@@ -975,7 +1055,11 @@ fn main() -> AppResult<()> {
     );
     stdout.flush()?;
 
-    let run_result = run_app_loop(&mut app_state, &input_rx, &mut stdout);
+    let run_result = run_app_loop(&mut app_state, &input_rx, &mut stdout, &mut hand_runtime);
+    if let Some(runtime) = hand_runtime.as_mut() {
+        runtime.request_shutdown();
+        let _ = runtime.join_with_deadline(std::time::Duration::from_millis(100));
+    }
     #[cfg(feature = "metal")]
     let cleanup_result = cleanup_terminal(&mut stdout, app_state.last_gpu_error.as_deref());
     #[cfg(not(feature = "metal"))]
@@ -1044,6 +1128,40 @@ mod tests {
         assert!((target.y - 0.0).abs() < f32::EPSILON);
         assert!((target.z - 0.0).abs() < f32::EPSILON);
         assert!(camera.forward.z < -0.99);
+    }
+
+    #[cfg(feature = "hands")]
+    #[test]
+    fn hand_cli_normalizes_replay_debug_config() {
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--hands",
+            "--hand-debug",
+            "--hand-backend",
+            "replay",
+            "--hand-target-fps",
+            "24",
+            "--hand-timeout-ms",
+            "150",
+            "--hand-sensitivity",
+            "2.5",
+            "--demo",
+        ]);
+        let config = hand_config_from_cli(&cli).unwrap();
+        assert!(config.enabled);
+        assert!(config.debug);
+        assert_eq!(config.backend, hand::HandBackend::Replay);
+        assert_eq!(config.target_fps, 24);
+        assert_eq!(config.timeout_ms, 150);
+        assert!((config.sensitivity - 2.5).abs() < f32::EPSILON);
+    }
+
+    #[cfg(not(feature = "hands"))]
+    #[test]
+    fn hand_flags_fail_clearly_without_feature() {
+        let cli = Cli::parse_from(["tortuise", "--hands", "--demo"]);
+        let err = validate_hand_cli_supported(&cli).unwrap_err();
+        assert!(err.to_string().contains("--features hands"));
     }
 
     #[cfg(feature = "metal")]

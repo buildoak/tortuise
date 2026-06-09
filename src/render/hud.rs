@@ -131,6 +131,25 @@ pub fn draw_hud(
             hud.push_str("OK");
         }
     }
+    #[cfg(feature = "hands")]
+    {
+        if app_state.hand_control.enabled || app_state.hand_control.debug {
+            write!(
+                hud,
+                "  Hands:{} {} {}h p{} age{:.0}ms",
+                if app_state.hand_control.debug {
+                    "DBG"
+                } else {
+                    "ON"
+                },
+                app_state.hand_control.backend.name(),
+                app_state.hand_control.hands_visible,
+                app_state.hand_control.pinched_hands,
+                app_state.hand_control.control_age_ms,
+            )
+            .map_err(|_| io::Error::other("failed to format HUD"))?;
+        }
+    }
     truncate_and_pad_in_place(hud, width);
 
     let tc = app_state.use_truecolor;
@@ -152,6 +171,10 @@ pub fn draw_hud(
     };
     hud.clear();
     hud.push_str(controls);
+    #[cfg(feature = "hands")]
+    if app_state.hand_control.enabled || app_state.hand_control.debug {
+        hud.push_str("  H:Hands");
+    }
     truncate_and_pad_in_place(hud, width);
 
     queue!(

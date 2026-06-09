@@ -5,6 +5,7 @@ use std::time::Instant;
 use super::{
     live_telemetry::LiveFrameTelemetry, AppResult, AppState, CameraMode, RenderMode, FRAME_TARGET,
 };
+use crate::hand::{HandDrainStats, HandRuntime};
 
 const HALFBLOCK_FRAME_TARGET: std::time::Duration = std::time::Duration::from_millis(33);
 #[cfg(feature = "metal")]
@@ -73,6 +74,7 @@ fn metal_gpu_wait_ms(app_state: &AppState) -> f64 {
 fn build_live_frame_telemetry(
     app_state: &AppState,
     input_stats: crate::input::InputDrainStats,
+    hand_stats: HandDrainStats,
     target: std::time::Duration,
     frame_ms: f64,
     input_drain_ms: f64,
@@ -121,6 +123,33 @@ fn build_live_frame_telemetry(
         previous_telemetry_write_ms: app_state.last_telemetry_write_ms as f64,
         ..LiveFrameTelemetry::default()
     };
+
+    #[cfg(feature = "hands")]
+    {
+        telemetry.hand_enabled = app_state.hand_control.enabled;
+        telemetry.hand_available =
+            app_state.hand_control.status != crate::hand::types::HandStatus::Off;
+        telemetry.hand_backend = app_state.hand_control.backend.name();
+        telemetry.hand_status = app_state.hand_control.status.code();
+        telemetry.hand_debug = app_state.hand_control.debug;
+        telemetry.hand_applied_this_frame = app_state.hand_control.applied_this_frame;
+        telemetry.hand_control_age_ms = app_state.hand_control.control_age_ms;
+        telemetry.hand_hands_visible = app_state.hand_control.hands_visible;
+        telemetry.hand_pinched_hands = app_state.hand_control.pinched_hands;
+        telemetry.hand_engaged = app_state.hand_control.engaged;
+        telemetry.hand_messages = hand_stats.messages;
+        telemetry.hand_samples = hand_stats.samples;
+        telemetry.hand_dropped_or_superseded = hand_stats.dropped_or_superseded;
+        telemetry.hand_oldest_age_ms = hand_stats.oldest_age_ms;
+        telemetry.hand_newest_age_ms = hand_stats.newest_age_ms;
+        telemetry.hand_drain_ms = hand_stats.drain_ms;
+        telemetry.hand_sample_latency_ms = hand_stats.sample_latency_ms;
+        telemetry.hand_detect_ms = hand_stats.detect_ms;
+        telemetry.hand_detect_ewma_ms = app_state.hand_control.detect_ewma_ms;
+        telemetry.hand_target_fps = app_state.hand_control.target_fps;
+    }
+    #[cfg(not(feature = "hands"))]
+    let _ = hand_stats;
 
     #[cfg(feature = "metal")]
     {
@@ -284,6 +313,7 @@ pub fn run_app_loop(
     app_state: &mut AppState,
     input_rx: &crate::input::thread::InputReceiver,
     stdout: &mut io::BufWriter<io::Stdout>,
+    hand_runtime: &mut Option<HandRuntime>,
 ) -> AppResult<()> {
     loop {
         let frame_start = Instant::now();
@@ -293,6 +323,14 @@ pub fn run_app_loop(
         let input_drain_ms = duration_ms(input_drain_start.elapsed());
         if input_stats.quit_requested {
             break;
+        }
+
+        let hand_drain_start = Instant::now();
+        let mut hand_stats = HandDrainStats::default();
+        if let Some(runtime) = hand_runtime.as_mut() {
+            hand_stats = runtime.drain_into(&mut app_state.hand_control, Instant::now());
+            hand_stats.drain_ms = duration_ms(hand_drain_start.elapsed());
+            app_state.hand_control.last_drain = hand_stats.clone();
         }
 
         let now = Instant::now();
@@ -346,6 +384,7 @@ pub fn run_app_loop(
             let live_frame = build_live_frame_telemetry(
                 app_state,
                 input_stats,
+                hand_stats,
                 target,
                 frame_ms,
                 input_drain_ms,

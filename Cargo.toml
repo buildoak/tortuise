@@ -16,6 +16,7 @@ exclude = ["scenes/bonsai.splat", "scenes/luigi.ply", "assets/*", "scripts/*"]
 [features]
 default = []
 metal = ["dep:metal", "dep:objc"]
+hands = []
 
 [dependencies]
 crossterm = "0.28"
