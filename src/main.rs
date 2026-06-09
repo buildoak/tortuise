@@ -158,7 +158,7 @@ struct Cli {
     #[cfg_attr(not(feature = "hands"), arg(hide = true))]
     #[arg(
         long,
-        value_name = "off|replay|sidecar",
+        value_name = "off|replay|sidecar|apple-vision",
         help = "WIP hand-control backend"
     )]
     hand_backend: Option<String>,

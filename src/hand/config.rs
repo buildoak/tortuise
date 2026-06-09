@@ -5,6 +5,7 @@ pub enum HandBackend {
     Off,
     Replay,
     Sidecar,
+    AppleVision,
 }
 
 impl HandBackend {
@@ -13,9 +14,11 @@ impl HandBackend {
             "off" | "" => Ok(Self::Off),
             "replay" => Ok(Self::Replay),
             "sidecar" => Ok(Self::Sidecar),
-            _ => Err(
-                format!("Invalid --hand-backend '{raw}'. Expected off, replay, or sidecar").into(),
-            ),
+            "apple-vision" | "apple_vision" | "vision" => Ok(Self::AppleVision),
+            _ => Err(format!(
+                "Invalid --hand-backend '{raw}'. Expected off, replay, sidecar, or apple-vision"
+            )
+            .into()),
         }
     }
 
@@ -25,6 +28,7 @@ impl HandBackend {
             Self::Off => "off",
             Self::Replay => "replay",
             Self::Sidecar => "sidecar",
+            Self::AppleVision => "apple-vision",
         }
     }
 }
