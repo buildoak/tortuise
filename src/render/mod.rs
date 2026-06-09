@@ -1,3 +1,5 @@
+#[cfg(feature = "hands")]
+mod camera_preview;
 pub mod frame;
 mod frame_halfblock;
 pub mod frame_kitty;

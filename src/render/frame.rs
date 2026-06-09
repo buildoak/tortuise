@@ -329,6 +329,9 @@ pub fn render_frame(
         }
     }
 
+    #[cfg(feature = "hands")]
+    super::camera_preview::draw_camera_preview(app_state, cols, rows, stdout)?;
+
     if app_state.show_hud {
         super::hud::draw_hud(app_state, cols, rows, ss, stdout)?;
     }

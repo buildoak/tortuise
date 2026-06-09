@@ -4,12 +4,22 @@ import Vision
 
 final class HandVisionDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let request = VNDetectHumanHandPoseRequest()
-    private let targetInterval: TimeInterval
-    private var lastEmit = Date.distantPast
+    private let targetSampleInterval: TimeInterval
+    private let previewEnabled: Bool
+    private let previewWidth: Int
+    private let previewHeight: Int
+    private let previewInterval: TimeInterval
+    private var lastSampleEmit = Date.distantPast
+    private var lastPreviewEmit = Date.distantPast
     private var sequence: UInt64 = 0
+    private var previewSequence: UInt64 = 0
 
-    init(targetFps: Int) {
-        self.targetInterval = 1.0 / Double(max(1, min(60, targetFps)))
+    init(targetFps: Int, previewEnabled: Bool, previewWidth: Int, previewHeight: Int, previewFps: Int) {
+        self.targetSampleInterval = 1.0 / Double(max(1, min(60, targetFps)))
+        self.previewEnabled = previewEnabled
+        self.previewWidth = max(16, min(192, previewWidth))
+        self.previewHeight = max(9, min(108, previewHeight))
+        self.previewInterval = 1.0 / Double(max(1, min(30, previewFps)))
         super.init()
         self.request.maximumHandCount = 2
     }
@@ -20,10 +30,19 @@ final class HandVisionDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         from connection: AVCaptureConnection
     ) {
         let now = Date()
-        if now.timeIntervalSince(lastEmit) < targetInterval {
+        if previewEnabled && now.timeIntervalSince(lastPreviewEmit) >= previewInterval {
+            lastPreviewEmit = now
+            previewSequence += 1
+            if let payload = previewPayload(sampleBuffer: sampleBuffer) {
+                print("preview \(previewSequence) \(previewWidth) \(previewHeight) \(payload)")
+                fflush(stdout)
+            }
+        }
+
+        if now.timeIntervalSince(lastSampleEmit) < targetSampleInterval {
             return
         }
-        lastEmit = now
+        lastSampleEmit = now
         sequence += 1
 
         let started = Date()
@@ -52,6 +71,37 @@ final class HandVisionDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDe
             print(String(format: "sample %llu %.3f %@", sequence, detectMs, parts.joined(separator: " ")))
         }
         fflush(stdout)
+    }
+
+    private func previewPayload(sampleBuffer: CMSampleBuffer) -> String? {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return nil
+        }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            return nil
+        }
+
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let source = baseAddress.assumingMemoryBound(to: UInt8.self)
+        var rgb = [UInt8](repeating: 0, count: previewWidth * previewHeight * 3)
+
+        for y in 0..<previewHeight {
+            let sy = min(sourceHeight - 1, y * sourceHeight / previewHeight)
+            for x in 0..<previewWidth {
+                let sx = min(sourceWidth - 1, sourceWidth - 1 - (x * sourceWidth / previewWidth))
+                let srcIdx = sy * bytesPerRow + sx * 4
+                let dstIdx = (y * previewWidth + x) * 3
+                rgb[dstIdx] = source[srcIdx + 2]
+                rgb[dstIdx + 1] = source[srcIdx + 1]
+                rgb[dstIdx + 2] = source[srcIdx]
+            }
+        }
+
+        return Data(rgb).base64EncodedString()
     }
 
     private func summarizeHand(observation: VNHumanHandPoseObservation, index: Int) -> String? {
@@ -101,14 +151,31 @@ final class HandVisionDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     }
 }
 
-func parseTargetFps() -> Int {
+struct HelperArgs {
+    var targetFps: Int = 30
+    var previewEnabled: Bool = false
+    var previewWidth: Int = 64
+    var previewHeight: Int = 36
+    var previewFps: Int = 8
+}
+
+func parseHelperArgs() -> HelperArgs {
     let args = CommandLine.arguments
+    var parsed = HelperArgs()
     for idx in args.indices {
         if args[idx] == "--fps", idx + 1 < args.count, let value = Int(args[idx + 1]) {
-            return max(1, min(60, value))
+            parsed.targetFps = max(1, min(60, value))
+        } else if args[idx] == "--preview" {
+            parsed.previewEnabled = true
+        } else if args[idx] == "--preview-width", idx + 1 < args.count, let value = Int(args[idx + 1]) {
+            parsed.previewWidth = max(16, min(192, value))
+        } else if args[idx] == "--preview-height", idx + 1 < args.count, let value = Int(args[idx + 1]) {
+            parsed.previewHeight = max(9, min(108, value))
+        } else if args[idx] == "--preview-fps", idx + 1 < args.count, let value = Int(args[idx + 1]) {
+            parsed.previewFps = max(1, min(30, value))
         }
     }
-    return 30
+    return parsed
 }
 
 func requestCameraAccessIfNeeded() -> Bool {
@@ -132,6 +199,7 @@ func requestCameraAccessIfNeeded() -> Bool {
 }
 
 func main() {
+    let args = parseHelperArgs()
     guard requestCameraAccessIfNeeded() else {
         print("error camera_denied")
         fflush(stdout)
@@ -168,7 +236,13 @@ func main() {
     output.videoSettings = [
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
     ]
-    let delegate = HandVisionDelegate(targetFps: parseTargetFps())
+    let delegate = HandVisionDelegate(
+        targetFps: args.targetFps,
+        previewEnabled: args.previewEnabled,
+        previewWidth: args.previewWidth,
+        previewHeight: args.previewHeight,
+        previewFps: args.previewFps
+    )
     output.setSampleBufferDelegate(delegate, queue: DispatchQueue(label: "tortuise.apple-vision-hands"))
     guard session.canAddOutput(output) else {
         print("error camera_output")

@@ -174,6 +174,22 @@ struct Cli {
     #[cfg_attr(not(feature = "hands"), arg(hide = true))]
     #[arg(long, value_name = "N", help = "Hand gesture sensitivity scalar")]
     hand_sensitivity: Option<f32>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(
+        long,
+        help = "Show a fixed-size bottom-right camera preview for hand control"
+    )]
+    camera_preview: bool,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(
+        long,
+        value_name = "N",
+        help = "Camera preview terminal size as a fraction of the terminal"
+    )]
+    camera_preview_scale: Option<f32>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(long, value_name = "N", help = "Camera preview frame rate")]
+    camera_preview_fps: Option<u32>,
     #[cfg(feature = "metal")]
     #[arg(
         long,
@@ -377,6 +393,9 @@ fn hand_flags_requested(cli: &Cli) -> bool {
         || cli.hand_target_fps.is_some()
         || cli.hand_timeout_ms.is_some()
         || cli.hand_sensitivity.is_some()
+        || cli.camera_preview
+        || cli.camera_preview_scale.is_some()
+        || cli.camera_preview_fps.is_some()
 }
 
 #[cfg(not(feature = "hands"))]
@@ -401,6 +420,9 @@ fn hand_config_from_cli(cli: &Cli) -> AppResult<hand::HandConfig> {
         cli.hand_target_fps,
         cli.hand_timeout_ms,
         cli.hand_sensitivity,
+        cli.camera_preview,
+        cli.camera_preview_scale,
+        cli.camera_preview_fps,
     )
 }
 
@@ -1145,6 +1167,11 @@ mod tests {
             "150",
             "--hand-sensitivity",
             "2.5",
+            "--camera-preview",
+            "--camera-preview-scale",
+            "0.2",
+            "--camera-preview-fps",
+            "10",
             "--demo",
         ]);
         let config = hand_config_from_cli(&cli).unwrap();
@@ -1154,6 +1181,9 @@ mod tests {
         assert_eq!(config.target_fps, 24);
         assert_eq!(config.timeout_ms, 150);
         assert!((config.sensitivity - 2.5).abs() < f32::EPSILON);
+        assert!(config.camera_preview);
+        assert!((config.camera_preview_scale - 0.2).abs() < f32::EPSILON);
+        assert_eq!(config.camera_preview_fps, 10);
     }
 
     #[cfg(not(feature = "hands"))]

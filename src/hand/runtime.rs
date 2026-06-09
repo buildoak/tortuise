@@ -10,17 +10,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
 use super::{
     bus::LatestBus,
     config::{HandBackend, HandConfig},
     replay::ReplayHandSource,
-    types::{HandControlState, HandDrainStats, HandInputMessage, HandPoseFrame, TrackedHand},
+    types::{
+        CameraPreviewFrame, HandControlState, HandDrainStats, HandInputMessage, HandPoseFrame,
+        TrackedHand,
+    },
 };
 
 #[derive(Debug)]
 pub struct HandRuntime {
     config: HandConfig,
     bus: LatestBus<HandInputMessage>,
+    preview_bus: LatestBus<CameraPreviewFrame>,
     shutdown: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     done_rx: Option<mpsc::Receiver<()>>,
@@ -30,10 +36,12 @@ pub struct HandRuntime {
 impl HandRuntime {
     pub fn start(config: HandConfig) -> Self {
         let bus = LatestBus::new();
+        let preview_bus = LatestBus::new();
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut runtime = Self {
             config: config.clone(),
             bus: bus.clone(),
+            preview_bus: preview_bus.clone(),
             shutdown: Arc::clone(&shutdown),
             handle: None,
             done_rx: None,
@@ -54,6 +62,9 @@ impl HandRuntime {
                         Duration::from_millis((1000 / config.target_fps.max(1) as u64).max(1));
                     while !shutdown.load(Ordering::Relaxed) {
                         bus.publish(HandInputMessage::Sample(source.next_frame(Instant::now())));
+                        if config.camera_preview {
+                            preview_bus.publish(synthetic_preview_frame(Instant::now()));
+                        }
                         thread::sleep(frame_interval);
                     }
                     let _ = done_tx.send(());
@@ -69,7 +80,15 @@ impl HandRuntime {
                 }));
             }
             HandBackend::AppleVision => {
-                runtime.start_apple_vision_reader(done_tx, bus, shutdown, config.target_fps);
+                runtime.start_apple_vision_reader(
+                    done_tx,
+                    bus,
+                    preview_bus,
+                    shutdown,
+                    config.target_fps,
+                    config.camera_preview,
+                    config.camera_preview_fps,
+                );
             }
             HandBackend::Off => unreachable!(),
         }
@@ -136,6 +155,14 @@ impl HandRuntime {
             }
         }
 
+        if self.config.camera_preview {
+            if let Some(preview) = self.preview_bus.take_latest().value {
+                state.observe_preview(preview, now);
+            } else {
+                state.update_preview_age(now);
+            }
+        }
+
         stats
     }
 
@@ -150,6 +177,7 @@ impl HandRuntime {
         Self {
             config: HandConfig::disabled(),
             bus,
+            preview_bus: LatestBus::new(),
             shutdown,
             handle: Some(handle),
             done_rx: Some(done_rx),
@@ -163,8 +191,11 @@ impl HandRuntime {
         &mut self,
         done_tx: mpsc::Sender<()>,
         bus: LatestBus<HandInputMessage>,
+        preview_bus: LatestBus<CameraPreviewFrame>,
         shutdown: Arc<AtomicBool>,
         target_fps: u32,
+        camera_preview: bool,
+        camera_preview_fps: u32,
     ) {
         let helper = match find_apple_vision_helper() {
             Some(path) => path,
@@ -174,9 +205,20 @@ impl HandRuntime {
             }
         };
 
-        let mut child = match Command::new(helper)
-            .arg("--fps")
-            .arg(target_fps.to_string())
+        let mut command = Command::new(helper);
+        command.arg("--fps").arg(target_fps.to_string());
+        if camera_preview {
+            command
+                .arg("--preview")
+                .arg("--preview-width")
+                .arg("64")
+                .arg("--preview-height")
+                .arg("36")
+                .arg("--preview-fps")
+                .arg(camera_preview_fps.to_string());
+        }
+
+        let mut child = match command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -207,7 +249,12 @@ impl HandRuntime {
                     bus.publish(HandInputMessage::Error("apple_vision_read_failed"));
                     break;
                 };
-                match parse_apple_vision_line(&line, Instant::now()) {
+                let captured_at = Instant::now();
+                if let Some(preview) = parse_apple_vision_preview_line(&line, captured_at) {
+                    preview_bus.publish(preview);
+                    continue;
+                }
+                match parse_apple_vision_line(&line, captured_at) {
                     Some(message) => bus.publish(message),
                     None => {}
                 }
@@ -218,6 +265,27 @@ impl HandRuntime {
             }
             let _ = done_tx.send(());
         }));
+    }
+}
+
+fn synthetic_preview_frame(captured_at: Instant) -> CameraPreviewFrame {
+    let width = 64usize;
+    let height = 36usize;
+    let mut rgb = vec![0u8; width * height * 3];
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (y * width + x) * 3;
+            rgb[idx] = (x * 255 / width) as u8;
+            rgb[idx + 1] = (y * 255 / height) as u8;
+            rgb[idx + 2] = 72;
+        }
+    }
+    CameraPreviewFrame {
+        sequence: 0,
+        captured_at,
+        width,
+        height,
+        rgb,
     }
 }
 
@@ -308,6 +376,31 @@ fn parse_apple_vision_line(line: &str, captured_at: Instant) -> Option<HandInput
     }))
 }
 
+fn parse_apple_vision_preview_line(line: &str, captured_at: Instant) -> Option<CameraPreviewFrame> {
+    let mut parts = line.trim().split_whitespace();
+    if parts.next()? != "preview" {
+        return None;
+    }
+    let sequence = parts.next()?.parse::<u64>().ok()?;
+    let width = parts.next()?.parse::<usize>().ok()?;
+    let height = parts.next()?.parse::<usize>().ok()?;
+    if width == 0 || height == 0 || width > 512 || height > 512 {
+        return None;
+    }
+    let payload = parts.next()?;
+    let rgb = BASE64_STANDARD.decode(payload.as_bytes()).ok()?;
+    if rgb.len() != width.saturating_mul(height).saturating_mul(3) {
+        return None;
+    }
+    Some(CameraPreviewFrame {
+        sequence,
+        captured_at,
+        width,
+        height,
+        rgb,
+    })
+}
+
 impl Drop for HandRuntime {
     fn drop(&mut self) {
         self.request_shutdown();
@@ -329,6 +422,9 @@ mod tests {
             target_fps: 60,
             timeout_ms: 200,
             sensitivity: 1.0,
+            camera_preview: false,
+            camera_preview_scale: 0.15,
+            camera_preview_fps: 8,
         };
         let mut runtime = HandRuntime::start(config.clone());
         thread::sleep(Duration::from_millis(40));
@@ -359,6 +455,18 @@ mod tests {
         let message = parse_apple_vision_line("error camera_denied", now).expect("error line");
         assert!(matches!(message, HandInputMessage::Error("camera_denied")));
         assert!(parse_apple_vision_line("status apple_vision_ready", now).is_none());
+    }
+
+    #[test]
+    fn apple_vision_preview_parser_accepts_rgb_payload() {
+        let now = Instant::now();
+        let payload = BASE64_STANDARD.encode([255u8, 0, 0, 0, 255, 0]);
+        let frame = parse_apple_vision_preview_line(&format!("preview 7 2 1 {payload}"), now)
+            .expect("preview line");
+        assert_eq!(frame.sequence, 7);
+        assert_eq!(frame.width, 2);
+        assert_eq!(frame.height, 1);
+        assert_eq!(frame.rgb, vec![255, 0, 0, 0, 255, 0]);
     }
 
     #[test]

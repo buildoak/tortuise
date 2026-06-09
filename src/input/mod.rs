@@ -411,6 +411,9 @@ mod tests {
             target_fps: 30,
             timeout_ms: 200,
             sensitivity: 1.0,
+            camera_preview: false,
+            camera_preview_scale: 0.15,
+            camera_preview_fps: 8,
         });
 
         handle_input_event(

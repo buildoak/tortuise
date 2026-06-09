@@ -41,6 +41,9 @@ pub struct HandConfig {
     pub target_fps: u32,
     pub timeout_ms: u64,
     pub sensitivity: f32,
+    pub camera_preview: bool,
+    pub camera_preview_scale: f32,
+    pub camera_preview_fps: u32,
 }
 
 impl HandConfig {
@@ -52,6 +55,9 @@ impl HandConfig {
             target_fps: 30,
             timeout_ms: 200,
             sensitivity: 1.0,
+            camera_preview: false,
+            camera_preview_scale: 0.15,
+            camera_preview_fps: 8,
         }
     }
 
@@ -62,6 +68,9 @@ impl HandConfig {
         target_fps: Option<u32>,
         timeout_ms: Option<u64>,
         sensitivity: Option<f32>,
+        camera_preview: bool,
+        camera_preview_scale: Option<f32>,
+        camera_preview_fps: Option<u32>,
     ) -> AppResult<Self> {
         let mut backend = backend_raw
             .map(HandBackend::parse)
@@ -83,8 +92,16 @@ impl HandConfig {
         if !sensitivity.is_finite() || sensitivity <= 0.0 || sensitivity > 20.0 {
             return Err("--hand-sensitivity must be finite and in 0..=20".into());
         }
+        let camera_preview_scale = camera_preview_scale.unwrap_or(0.15);
+        if !camera_preview_scale.is_finite() || !(0.05..=0.50).contains(&camera_preview_scale) {
+            return Err("--camera-preview-scale must be finite and in 0.05..=0.50".into());
+        }
+        let camera_preview_fps = camera_preview_fps.unwrap_or(8);
+        if !(1..=30).contains(&camera_preview_fps) {
+            return Err("--camera-preview-fps must be in 1..=30".into());
+        }
 
-        let enabled = hands || backend != HandBackend::Off || debug;
+        let enabled = hands || backend != HandBackend::Off || debug || camera_preview;
         if !enabled {
             backend = HandBackend::Off;
         }
@@ -96,6 +113,9 @@ impl HandConfig {
             target_fps,
             timeout_ms,
             sensitivity,
+            camera_preview,
+            camera_preview_scale,
+            camera_preview_fps,
         })
     }
 }
@@ -106,7 +126,8 @@ mod tests {
 
     #[test]
     fn config_defaults_to_replay_when_hands_enabled() {
-        let config = HandConfig::from_parts(true, None, true, None, None, None).unwrap();
+        let config =
+            HandConfig::from_parts(true, None, true, None, None, None, false, None, None).unwrap();
         assert!(config.enabled);
         assert_eq!(config.backend, HandBackend::Replay);
         assert_eq!(config.target_fps, 30);
@@ -115,8 +136,29 @@ mod tests {
 
     #[test]
     fn config_rejects_invalid_ranges() {
-        assert!(HandConfig::from_parts(true, None, false, Some(0), None, None).is_err());
-        assert!(HandConfig::from_parts(true, None, false, None, Some(5), None).is_err());
-        assert!(HandConfig::from_parts(true, None, false, None, None, Some(-1.0)).is_err());
+        assert!(
+            HandConfig::from_parts(true, None, false, Some(0), None, None, false, None, None)
+                .is_err()
+        );
+        assert!(
+            HandConfig::from_parts(true, None, false, None, Some(5), None, false, None, None)
+                .is_err()
+        );
+        assert!(HandConfig::from_parts(
+            true,
+            None,
+            false,
+            None,
+            None,
+            Some(-1.0),
+            false,
+            None,
+            None
+        )
+        .is_err());
+        assert!(
+            HandConfig::from_parts(true, None, false, None, None, None, true, Some(0.8), None)
+                .is_err()
+        );
     }
 }

@@ -13,6 +13,16 @@ pub struct TrackedHand {
 }
 
 #[derive(Debug, Clone)]
+pub struct CameraPreviewFrame {
+    #[allow(dead_code)]
+    pub sequence: u64,
+    pub captured_at: Instant,
+    pub width: usize,
+    pub height: usize,
+    pub rgb: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct HandPoseFrame {
     #[allow(dead_code)]
     pub sequence: u64,
@@ -115,6 +125,11 @@ pub struct HandControlState {
     pub detect_ewma_ms: f64,
     pub last_drain: HandDrainStats,
     pub controller: GestureController,
+    pub camera_preview_enabled: bool,
+    pub camera_preview_scale: f32,
+    pub camera_preview_age_ms: f64,
+    pub latest_preview: Option<CameraPreviewFrame>,
+    pub latest_hands: Vec<TrackedHand>,
 }
 
 impl HandControlState {
@@ -148,6 +163,11 @@ impl HandControlState {
                 std::time::Duration::from_millis(config.timeout_ms),
                 config.sensitivity,
             ),
+            camera_preview_enabled: config.camera_preview,
+            camera_preview_scale: config.camera_preview_scale,
+            camera_preview_age_ms: 0.0,
+            latest_preview: None,
+            latest_hands: Vec::new(),
         }
     }
 
@@ -160,6 +180,7 @@ impl HandControlState {
         self.yaw_delta = 0.0;
         self.pitch_delta = 0.0;
         self.control_age_ms = 0.0;
+        self.latest_hands.clear();
         self.controller.reset();
     }
 
@@ -177,6 +198,7 @@ impl HandControlState {
         let output = self.controller.observe(frame, now);
         self.hands_visible = frame.visible_count();
         self.pinched_hands = frame.pinched_count();
+        self.latest_hands = frame.hands.clone();
         self.engaged = output.engaged;
         self.applied_this_frame = false;
         self.yaw_delta = output.yaw_delta;
@@ -197,6 +219,23 @@ impl HandControlState {
             HandStatus::Tracking
         };
         self.last_drain = stats;
+    }
+
+    pub fn observe_preview(&mut self, frame: CameraPreviewFrame, now: Instant) {
+        self.camera_preview_age_ms = now
+            .saturating_duration_since(frame.captured_at)
+            .as_secs_f64()
+            * 1000.0;
+        self.latest_preview = Some(frame);
+    }
+
+    pub fn update_preview_age(&mut self, now: Instant) {
+        if let Some(frame) = self.latest_preview.as_ref() {
+            self.camera_preview_age_ms = now
+                .saturating_duration_since(frame.captured_at)
+                .as_secs_f64()
+                * 1000.0;
+        }
     }
 
     pub fn set_error(&mut self, code: &'static str, stats: HandDrainStats) {
