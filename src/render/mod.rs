@@ -155,12 +155,24 @@ pub enum RenderMode {
 }
 
 impl RenderMode {
+    #[cfg_attr(feature = "metal", allow(dead_code))]
     pub fn next(self) -> Self {
+        self.next_with_kitty(true)
+    }
+
+    pub fn next_with_kitty(self, kitty_enabled: bool) -> Self {
+        #[cfg(not(feature = "metal"))]
+        let _ = kitty_enabled;
+
         match self {
             Self::Halfblock => {
                 #[cfg(feature = "metal")]
                 {
-                    Self::Kitty
+                    if kitty_enabled {
+                        Self::Kitty
+                    } else {
+                        Self::PointCloud
+                    }
                 }
                 #[cfg(not(feature = "metal"))]
                 {
@@ -221,6 +233,32 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "metal"))]
+        assert_eq!(
+            names,
+            vec![
+                "Halfblock",
+                "PointCloud",
+                "Matrix",
+                "BlockDensity",
+                "Braille",
+                "AsciiClassic"
+            ]
+        );
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn render_mode_cycle_can_skip_kitty() {
+        let mut mode = RenderMode::Halfblock;
+        let mut names = Vec::new();
+        loop {
+            names.push(mode.name());
+            mode = mode.next_with_kitty(false);
+            if mode == RenderMode::Halfblock {
+                break;
+            }
+        }
+
         assert_eq!(
             names,
             vec![
@@ -317,6 +355,8 @@ pub struct AppState {
     pub orbit_target: Vec3,
     pub supersample_factor: u32,
     pub render_mode: RenderMode,
+    #[cfg(feature = "metal")]
+    pub kitty_cycle_enabled: bool,
     #[cfg_attr(not(feature = "metal"), allow(dead_code))]
     pub backend: Backend,
     pub use_truecolor: bool,

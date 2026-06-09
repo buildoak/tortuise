@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- WIP Metal + Kitty graphics preview for macOS/Apple Silicon behind explicit `--kitty` and `--live-preset macbook-neo` launch flags.
+- Dramatically faster heavy-splat live rendering path using the Metal backend, fixed LoD mode, Kitty RGB output, and a MacBook Neo tuned preset.
+- Live interaction telemetry via `--live-telemetry-jsonl`, covering frame timing, render timing, terminal write timing, and input age.
+- Probe and benchmark tooling for rendered-image validation, visual review packets, and performance comparisons.
+
+### Changed
+- `M` now keeps Kitty flag-gated: normal launches cycle through terminal render modes only; Kitty is included in the mode cycle only after `--kitty` or a live preset enables it.
+- README now documents the Metal/Kitty path as a useful WIP preview, not a default polished release.
+
+### Notes
+- This is a WIP version with a major Metal performance jump, but the path still needs final polish.
+- Full hands-control integration is planned within this week.
+
 ## [0.1.1] - 2026-02-24
 
 ### Added

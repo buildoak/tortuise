@@ -914,6 +914,8 @@ fn main() -> AppResult<()> {
                 RenderMode::Halfblock
             }
         },
+        #[cfg(feature = "metal")]
+        kitty_cycle_enabled: cli.kitty,
         backend,
         use_truecolor,
         #[cfg(feature = "metal")]

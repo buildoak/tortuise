@@ -11,7 +11,7 @@ Gaussian splats viewer that works in your terminal. Yes, it's made of symbols!
 
 [![Terminal Trove - Tool of the Week](https://cdn.terminaltrove.com/media/badges/tool_of_the_week/svg/terminal_trove_tool_of_the_week_gold_transparent.svg)](https://terminaltrove.com/tortuise/)
 
-A CPU-first 3D Gaussian Splatting viewer inspired by [ratatui](https://github.com/ratatui/ratatui), built on [crossterm](https://github.com/crossterm-rs/crossterm). Fully parallelized rendering pipeline via [rayon](https://github.com/rayon-rs/rayon), perceptual color mapping, six render modes — all running on pure CPU. Real scenes with 1.1M splats hold 10–25 FPS. No GPU required. Works on potato. Scenes [download](#where-to-get-scenes) included!
+A CPU-first 3D Gaussian Splatting viewer inspired by [ratatui](https://github.com/ratatui/ratatui), built on [crossterm](https://github.com/crossterm-rs/crossterm). Fully parallelized rendering pipeline via [rayon](https://github.com/rayon-rs/rayon), perceptual color mapping, six terminal render modes, and an optional WIP Metal + Kitty graphics preview on macOS. Real scenes with 1.1M splats hold 10–25 FPS on CPU, and the new Metal path can be dramatically faster on Apple Silicon. No GPU required for the default experience. Scenes [download](#where-to-get-scenes) included!
 
 <!-- Demo recorded in Ghostty, halfblock mode, no Kitty graphics protocol — pure Unicode characters -->
 
@@ -25,7 +25,8 @@ Inspiration by [ratatui](https://github.com/ratatui/ratatui) merged with binge w
 
 | Feature | Details |
 |---------|---------|
-| **6 render modes** | Halfblock (default), point cloud, matrix, block density, braille, ASCII. Cycle with `M` |
+| **6 terminal render modes** | Halfblock (default), point cloud, matrix, block density, braille, ASCII. Cycle with `M` |
+| **WIP Metal + Kitty preview** | macOS/Apple Silicon acceleration behind explicit `--kitty` / `--live-preset macbook-neo` launch flags. Fast, useful, and still being polished |
 | **Full 3D navigation** | WASD movement, R/F vertical, arrow keys for yaw/pitch. Smooth held-key input |
 | **Two camera modes** | Free (fly anywhere) and Orbit (auto-rotate around origin). Switch with `Space` |
 | **.ply and .splat files** | Standard 3DGS formats. Binary little-endian PLY with SH coefficients, 32-byte .splat records |
@@ -67,6 +68,32 @@ pip install Pillow numpy  # needed once, for SOG scene format
 tortuise ramen.ply
 ```
 
+### WIP Metal + Kitty preview
+
+The current branch includes a WIP macOS Metal renderer with Kitty graphics protocol output. It is intentionally flag-gated while polish continues: normal launches stay on the terminal/CPU path, and `M` will not cycle into Kitty unless the session was launched with `--kitty` or a live preset.
+
+```bash
+# Build this preview from source with the Metal feature
+cargo install --path . --features metal
+
+# Recommended Apple Silicon live preset for local Kitty-capable terminals
+tortuise bee.ply --live-preset macbook-neo
+
+# Manual preview flags
+tortuise bee.ply \
+  --kitty \
+  --flip-y \
+  --camera-pos 0,0,0.5 \
+  --look-at 0,0,0 \
+  --metal-quality turbo \
+  --metal-lod fixed \
+  --metal-lod-splat-count 2100000 \
+  --metal-lod-order voxel \
+  --kitty-format rgb
+```
+
+This preview is already a large performance jump versus the original CPU terminal renderer on heavy splats, but it is not the final polished release. Hands control and the full interaction layer are planned for this week.
+
 ### CLI options
 
 ```
@@ -81,8 +108,21 @@ Options:
   --flip-z            Flip Z axis
   --supersample <N>   Supersampling factor [default: 1]
   --cpu               Force CPU rendering
+  --camera-pos <XYZ>  Start camera position, for example 0,0,0.5
+  --look-at <XYZ>     Initial look-at target, for example 0,0,0
+  --live-telemetry-jsonl <PATH>
+                      Write live frame/render/terminal/input telemetry as JSONL
   -h, --help          Print help
   -V, --version       Print version
+
+Metal builds also include:
+  --kitty             Enable WIP Kitty graphics protocol renderer
+  --live-preset <ID>  Apply a live preset, currently `macbook-neo`
+  --kitty-format <F>  Kitty payload format: rgba or rgb
+  --metal-quality <Q> Metal quality: exact, fast-preview, or turbo
+  --metal-lod <MODE>  Metal LoD mode: off or fixed
+  --metal-lod-splat-count <N>
+                      Active splat count for fixed Metal LoD
 ```
 
 ## Controls
@@ -95,7 +135,7 @@ Options:
 | `R` / `F` | Move up / down |
 | Arrow keys | Yaw and pitch (look around) |
 | `Space` | Switch to Orbit mode |
-| `M` | Cycle render mode |
+| `M` | Cycle render mode. Kitty appears only when launched with `--kitty` or a live preset |
 | `+` / `-` | Adjust movement speed |
 | `Tab` | Cycle HUD: minimal / debug / hidden |
 | `Z` | Reset camera |
@@ -181,10 +221,11 @@ The frame target is 8ms (~120fps). On truecolor terminals, colors are passed as 
 
 Things I want to improve next -- and contribution opportunities:
 
-- **Kitty graphics protocol** -- pixel-perfect rendering via the terminal image protocol. Roughly 18x the resolution of half-block characters. This is the big one.
+- **Hands control** -- camera-based gesture control for splat orbit/fly navigation. Targeting the full WIP version this week.
+- **Kitty graphics protocol polish** -- pixel-perfect rendering via the terminal image protocol. The Metal + Kitty path is working behind flags, but still needs final polish before it becomes a default UX.
 - **SHARP integration** -- image-to-splat-to-view pipeline. Single photo to 3D in your terminal.
 - **Sample scene bundle** -- curated downloadable scenes so people can skip the "where do I find a .splat file" step.
-- **GPU acceleration** -- a Metal compute backend exists behind a feature flag, but needs work at higher resolutions. Parked, not abandoned.
+- **GPU acceleration** -- the Metal compute backend is now useful on Apple Silicon and still improving.
 - **Performance** -- radix sort for depth ordering, SIMD-accelerated projection via glam, tighter memory layout.
 
 ## Built with

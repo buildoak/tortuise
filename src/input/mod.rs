@@ -170,7 +170,16 @@ pub fn handle_input_event(app_state: &mut AppState, event: Event) -> AppResult<(
                 KeyCode::Char(c) => match c.to_ascii_lowercase() {
                     'q' => app_state.input_state.quit_requested = true,
                     'm' => {
-                        app_state.render_mode = app_state.render_mode.next();
+                        #[cfg(feature = "metal")]
+                        {
+                            app_state.render_mode = app_state
+                                .render_mode
+                                .next_with_kitty(app_state.kitty_cycle_enabled);
+                        }
+                        #[cfg(not(feature = "metal"))]
+                        {
+                            app_state.render_mode = app_state.render_mode.next();
+                        }
                     }
                     'z' => {
                         camera::reset(&mut app_state.camera, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO);
@@ -238,6 +247,8 @@ mod tests {
             orbit_target: Vec3::ZERO,
             supersample_factor: 1,
             render_mode: RenderMode::Halfblock,
+            #[cfg(feature = "metal")]
+            kitty_cycle_enabled: false,
             backend: Backend::Cpu,
             use_truecolor: false,
             #[cfg(feature = "metal")]
@@ -352,6 +363,34 @@ mod tests {
         )
         .expect("decrease speed");
         assert!(app.move_speed < increased);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn mode_key_skips_kitty_unless_enabled() {
+        let mut app = make_state();
+
+        handle_input_event(
+            &mut app,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('m'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        )
+        .expect("mode key");
+        assert_eq!(app.render_mode, RenderMode::PointCloud);
+
+        app.render_mode = RenderMode::Halfblock;
+        app.kitty_cycle_enabled = true;
+        handle_input_event(
+            &mut app,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('m'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        )
+        .expect("mode key");
+        assert_eq!(app.render_mode, RenderMode::Kitty);
     }
 
     #[test]

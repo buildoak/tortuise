@@ -82,6 +82,8 @@ mod tests {
             orbit_target: Vec3::ZERO,
             supersample_factor: 1,
             render_mode: RenderMode::Halfblock,
+            #[cfg(feature = "metal")]
+            kitty_cycle_enabled: false,
             backend: Backend::Cpu,
             use_truecolor: false,
             #[cfg(feature = "metal")]
