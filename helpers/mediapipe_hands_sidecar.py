@@ -249,6 +249,7 @@ def run_capture(args: argparse.Namespace) -> int:
     preview_interval = 1.0 / max(1, args.preview_fps)
     sequence = 0
     emitted = 0
+    read_failures = 0
     stream_started_at = time.monotonic()
 
     options = vision.HandLandmarkerOptions(
@@ -281,8 +282,18 @@ def run_capture(args: argparse.Namespace) -> int:
 
                 ok, bgr_frame = capture.read()
                 if not ok:
-                    emit("error", code="camera_read_failed", sequence=sequence + 1)
-                    return 3
+                    read_failures += 1
+                    if read_failures >= args.max_camera_read_failures:
+                        emit(
+                            "error",
+                            code="camera_read_failed",
+                            sequence=sequence + 1,
+                            failures=read_failures,
+                        )
+                        return 3
+                    time.sleep(min(0.02 * read_failures, 0.25))
+                    continue
+                read_failures = 0
 
                 now = time.monotonic()
                 if now < next_sample_at:
@@ -355,6 +366,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview-height", type=int, default=36, help="preview RGB height")
     parser.add_argument("--preview-fps", type=int, default=8, help="target preview FPS")
     parser.add_argument(
+        "--max-camera-read-failures",
+        type=int,
+        default=30,
+        help="consecutive failed camera reads before emitting camera_read_failed",
+    )
+    parser.add_argument(
         "--no-mirror",
         dest="mirror",
         action="store_false",
@@ -376,6 +393,8 @@ def normalize_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--preview-fps must be in 1..=30")
     if not 1 <= args.num_hands <= 4:
         parser.error("--num-hands must be in 1..=4")
+    if args.max_camera_read_failures < 1:
+        parser.error("--max-camera-read-failures must be >= 1")
     if args.preview_size:
         args.preview_width, args.preview_height = args.preview_size
     if args.preview_width < 16 or args.preview_height < 9:
