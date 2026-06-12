@@ -92,6 +92,10 @@ pub fn draw_camera_preview(
     if !app_state.hand_control.camera_preview_enabled || !app_state.hand_control.enabled {
         return Ok(());
     }
+    #[cfg(feature = "metal")]
+    if app_state.render_mode == super::RenderMode::Kitty {
+        return Ok(());
+    }
     let Some(frame) = app_state.hand_control.latest_preview.as_ref() else {
         if let Some(rect) = preview_rect(cols, rows, app_state.hand_control.camera_preview_scale) {
             draw_placeholder(app_state, rect, stdout)?;

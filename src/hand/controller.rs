@@ -5,7 +5,7 @@ use super::types::{HandPoseFrame, TrackedHand};
 const PINCH_ENTER: f32 = 0.72;
 const PINCH_EXIT: f32 = 0.58;
 const DEADZONE: f32 = 0.015;
-const DELTA_CAP: f32 = 0.12;
+const DELTA_CAP: f32 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HandControlOutput {

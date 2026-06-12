@@ -401,6 +401,178 @@ fn draw_kitty_bitmap_hud(
     );
 }
 
+#[cfg(all(feature = "metal", feature = "hands"))]
+fn draw_kitty_camera_preview(
+    app_state: &AppState,
+    payload: &mut [u8],
+    width: usize,
+    height: usize,
+    format: KittyPayloadFormat,
+) {
+    if !app_state.hand_control.camera_preview_enabled
+        || !app_state.hand_control.enabled
+        || width < 96
+        || height < 54
+    {
+        return;
+    }
+
+    let margin = 6usize;
+    let scale = app_state
+        .hand_control
+        .camera_preview_scale
+        .clamp(0.05, 0.50);
+    let preview_w =
+        ((width as f32 * scale).round() as usize).clamp(64, width.saturating_sub(margin * 2));
+    let preview_h =
+        ((height as f32 * scale).round() as usize).clamp(36, height.saturating_sub(margin * 2));
+    if preview_w + margin * 2 > width || preview_h + margin * 2 > height {
+        return;
+    }
+    let x0 = width - preview_w - margin;
+    let y0 = height - preview_h - margin;
+    let bg = [10, 14, 18, 255];
+    let border = [210, 220, 235, 255];
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        x0,
+        y0,
+        preview_w,
+        preview_h,
+        bg,
+    );
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        x0,
+        y0,
+        preview_w,
+        1,
+        border,
+    );
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        x0,
+        y0 + preview_h - 1,
+        preview_w,
+        1,
+        border,
+    );
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        x0,
+        y0,
+        1,
+        preview_h,
+        border,
+    );
+    fill_payload_rect(
+        payload,
+        (width, height),
+        format,
+        x0 + preview_w - 1,
+        y0,
+        1,
+        preview_h,
+        border,
+    );
+
+    let Some(frame) = app_state.hand_control.latest_preview.as_ref() else {
+        let label = match app_state.hand_control.status {
+            crate::hand::types::HandStatus::Error(code) => code,
+            _ => "CAMERA",
+        };
+        draw_payload_text(
+            payload,
+            (width, height),
+            format,
+            x0 + 5,
+            y0 + preview_h / 2,
+            1,
+            label,
+            border,
+        );
+        return;
+    };
+    if frame.width == 0 || frame.height == 0 || frame.rgb.len() < frame.width * frame.height * 3 {
+        return;
+    }
+
+    for py in 1..preview_h.saturating_sub(1) {
+        let sy = py * frame.height / preview_h;
+        for px in 1..preview_w.saturating_sub(1) {
+            let sx = px * frame.width / preview_w;
+            let mut color = camera_preview_sample(frame, sx, sy);
+            if let Some(marker) =
+                camera_preview_marker(app_state, frame.width, frame.height, sx, sy)
+            {
+                color = marker;
+            }
+            put_payload_pixel(
+                payload,
+                width,
+                height,
+                format,
+                x0 + px,
+                y0 + py,
+                [color[0], color[1], color[2], 255],
+            );
+        }
+    }
+}
+
+#[cfg(all(feature = "metal", feature = "hands"))]
+fn camera_preview_sample(
+    frame: &crate::hand::types::CameraPreviewFrame,
+    x: usize,
+    y: usize,
+) -> [u8; 3] {
+    let x = x.min(frame.width.saturating_sub(1));
+    let y = y.min(frame.height.saturating_sub(1));
+    let idx = (y * frame.width + x) * 3;
+    [
+        *frame.rgb.get(idx).unwrap_or(&0),
+        *frame.rgb.get(idx + 1).unwrap_or(&0),
+        *frame.rgb.get(idx + 2).unwrap_or(&0),
+    ]
+}
+
+#[cfg(all(feature = "metal", feature = "hands"))]
+fn camera_preview_marker(
+    app_state: &AppState,
+    frame_width: usize,
+    frame_height: usize,
+    x: usize,
+    y: usize,
+) -> Option<[u8; 3]> {
+    let radius = (frame_width.max(frame_height) as f32 / 24.0).max(2.0);
+    let radius_sq = radius * radius;
+    for hand in &app_state.hand_control.latest_hands {
+        if hand.confidence < 0.25 {
+            continue;
+        }
+        let hx = hand.x.clamp(0.0, 1.0) * frame_width.saturating_sub(1) as f32;
+        let hy = (1.0 - hand.y.clamp(0.0, 1.0)) * frame_height.saturating_sub(1) as f32;
+        let dx = x as f32 - hx;
+        let dy = y as f32 - hy;
+        if dx * dx + dy * dy <= radius_sq {
+            return Some(if hand.pinch >= 0.72 {
+                [80, 255, 140]
+            } else {
+                [70, 190, 255]
+            });
+        }
+    }
+    None
+}
+
 fn validate_rgba_dimensions(width: usize, height: usize, rgba: &[u8]) -> io::Result<usize> {
     if width == 0 || height == 0 {
         return Err(io::Error::new(
@@ -833,6 +1005,8 @@ pub fn render_kitty_frame(
         format,
         scale_divisor,
     );
+    #[cfg(feature = "hands")]
+    draw_kitty_camera_preview(app_state, &mut payload, width, height, format);
 
     let encode_start = Instant::now();
     let encoded = BASE64_STANDARD.encode(&payload);
