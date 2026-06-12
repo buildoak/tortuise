@@ -240,22 +240,37 @@ impl HandRuntime {
         self.child = Some(Arc::clone(&child));
         self.handle = Some(thread::spawn(move || {
             let reader = BufReader::new(stdout);
+            let mut saw_error = false;
             for line in reader.lines() {
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
                 let Ok(line) = line else {
                     bus.publish(HandInputMessage::Error("sidecar_read_failed"));
+                    saw_error = true;
                     break;
                 };
                 match parse_sidecar_line(&line, Instant::now()) {
                     Ok(SidecarProtocolMessage::Ignored) => {}
-                    Ok(SidecarProtocolMessage::Input(message)) => bus.publish(message),
-                    Ok(SidecarProtocolMessage::Preview(frame)) => preview_bus.publish(frame),
-                    Err(err) => bus.publish(HandInputMessage::Error(err.code())),
+                    Ok(SidecarProtocolMessage::Input(HandInputMessage::Error(code))) => {
+                        saw_error = true;
+                        bus.publish(HandInputMessage::Error(code));
+                    }
+                    Ok(SidecarProtocolMessage::Input(message)) => {
+                        saw_error = false;
+                        bus.publish(message);
+                    }
+                    Ok(SidecarProtocolMessage::Preview(frame)) => {
+                        saw_error = false;
+                        preview_bus.publish(frame);
+                    }
+                    Err(err) => {
+                        saw_error = true;
+                        bus.publish(HandInputMessage::Error(err.code()));
+                    }
                 }
             }
-            if !shutdown.load(Ordering::Relaxed) {
+            if !shutdown.load(Ordering::Relaxed) && !saw_error {
                 bus.publish(HandInputMessage::Error("sidecar_exit"));
             }
             if let Ok(mut child) = child.lock() {

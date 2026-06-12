@@ -90,6 +90,10 @@ fn map_sidecar_error_code(raw: &str) -> &'static str {
         "camera_input" => "camera_input",
         "camera_output" => "camera_output",
         "vision_perform" => "vision_perform",
+        "model_missing" => "model_missing",
+        "dependency_import_failed" => "dependency_import_failed",
+        "camera_open_failed" => "camera_unavailable",
+        "camera_read_failed" => "camera_input",
         "tracker_stalled" => "tracker_stalled",
         "sidecar_exit" => "sidecar_exit",
         "sidecar_read_failed" => "sidecar_read_failed",
@@ -368,6 +372,29 @@ mod tests {
         assert!(matches!(
             message,
             SidecarProtocolMessage::Input(HandInputMessage::Error("sidecar_error"))
+        ));
+    }
+
+    #[test]
+    fn sidecar_parser_maps_mediapipe_helper_errors() {
+        let message = parse_sidecar_line(
+            "{\"type\":\"error\",\"code\":\"camera_open_failed\"}",
+            Instant::now(),
+        )
+        .expect("error parses");
+        assert!(matches!(
+            message,
+            SidecarProtocolMessage::Input(HandInputMessage::Error("camera_unavailable"))
+        ));
+
+        let message = parse_sidecar_line(
+            "{\"type\":\"error\",\"code\":\"model_missing\"}",
+            Instant::now(),
+        )
+        .expect("error parses");
+        assert!(matches!(
+            message,
+            SidecarProtocolMessage::Input(HandInputMessage::Error("model_missing"))
         ));
     }
 
