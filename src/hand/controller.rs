@@ -235,6 +235,8 @@ mod tests {
                 y,
                 pinch,
                 confidence: 0.95,
+                handedness: None,
+                landmarks: None,
             }],
         }
     }
@@ -302,6 +304,8 @@ mod tests {
                     y,
                     pinch: 0.9,
                     confidence: 0.95,
+                    handedness: None,
+                    landmarks: None,
                 },
                 TrackedHand {
                     id: 1,
@@ -309,6 +313,8 @@ mod tests {
                     y,
                     pinch: 0.9,
                     confidence: 0.95,
+                    handedness: None,
+                    landmarks: None,
                 },
             ],
         };

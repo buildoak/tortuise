@@ -163,6 +163,13 @@ struct Cli {
     )]
     hand_backend: Option<String>,
     #[cfg_attr(not(feature = "hands"), arg(hide = true))]
+    #[arg(
+        long,
+        value_name = "COMMAND",
+        help = "Sidecar command for --hand-backend sidecar"
+    )]
+    hand_sidecar: Option<String>,
+    #[cfg_attr(not(feature = "hands"), arg(hide = true))]
     #[arg(long, help = "Run hand runtime without mutating camera")]
     hand_debug: bool,
     #[cfg_attr(not(feature = "hands"), arg(hide = true))]
@@ -389,6 +396,7 @@ fn apply_splat_budget(splats: &mut Vec<splat::Splat>, budget: Option<usize>) -> 
 fn hand_flags_requested(cli: &Cli) -> bool {
     cli.hands
         || cli.hand_backend.is_some()
+        || cli.hand_sidecar.is_some()
         || cli.hand_debug
         || cli.hand_target_fps.is_some()
         || cli.hand_timeout_ms.is_some()
@@ -420,6 +428,7 @@ fn hand_config_from_cli(cli: &Cli) -> AppResult<hand::HandConfig> {
         cli.hand_target_fps,
         cli.hand_timeout_ms,
         cli.hand_sensitivity,
+        cli.hand_sidecar.as_deref(),
         cli.camera_preview,
         cli.camera_preview_scale,
         cli.camera_preview_fps,
@@ -1184,6 +1193,24 @@ mod tests {
         assert!(config.camera_preview);
         assert!((config.camera_preview_scale - 0.2).abs() < f32::EPSILON);
         assert_eq!(config.camera_preview_fps, 10);
+    }
+
+    #[cfg(feature = "hands")]
+    #[test]
+    fn hand_cli_sidecar_command_selects_sidecar_backend() {
+        let cli = Cli::parse_from([
+            "tortuise",
+            "--hand-sidecar",
+            "python3 helpers/mediapipe_hands_sidecar.py --preview",
+            "--demo",
+        ]);
+        let config = hand_config_from_cli(&cli).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.backend, hand::HandBackend::Sidecar);
+        assert_eq!(
+            config.sidecar_command.as_deref(),
+            Some("python3 helpers/mediapipe_hands_sidecar.py --preview")
+        );
     }
 
     #[cfg(not(feature = "hands"))]

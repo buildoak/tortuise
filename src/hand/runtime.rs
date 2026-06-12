@@ -12,6 +12,8 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
+#[cfg(feature = "hands")]
+use super::protocol::{parse_sidecar_line, SidecarProtocolMessage};
 use super::{
     bus::LatestBus,
     config::{HandBackend, HandConfig},
@@ -71,13 +73,20 @@ impl HandRuntime {
                 }));
             }
             HandBackend::Sidecar => {
-                runtime.handle = Some(thread::spawn(move || {
-                    bus.publish(HandInputMessage::Error("sidecar_unimplemented"));
-                    while !shutdown.load(Ordering::Relaxed) {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    let _ = done_tx.send(());
-                }));
+                #[cfg(feature = "hands")]
+                {
+                    runtime.start_sidecar_reader(done_tx, bus, preview_bus, shutdown);
+                }
+                #[cfg(not(feature = "hands"))]
+                {
+                    runtime.handle = Some(thread::spawn(move || {
+                        bus.publish(HandInputMessage::Error("sidecar_requires_hands"));
+                        while !shutdown.load(Ordering::Relaxed) {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        let _ = done_tx.send(());
+                    }));
+                }
             }
             HandBackend::AppleVision => {
                 runtime.start_apple_vision_reader(
@@ -187,6 +196,76 @@ impl HandRuntime {
 }
 
 impl HandRuntime {
+    #[cfg(feature = "hands")]
+    fn start_sidecar_reader(
+        &mut self,
+        done_tx: mpsc::Sender<()>,
+        bus: LatestBus<HandInputMessage>,
+        preview_bus: LatestBus<CameraPreviewFrame>,
+        shutdown: Arc<AtomicBool>,
+    ) {
+        let sidecar = match find_hand_sidecar_command(self.config.sidecar_command.as_deref()) {
+            Some(command) => command,
+            None => {
+                bus.publish(HandInputMessage::Error("sidecar_missing"));
+                let _ = done_tx.send(());
+                return;
+            }
+        };
+
+        let mut child = match Command::new("/bin/sh")
+            .arg("-lc")
+            .arg(sidecar)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => {
+                bus.publish(HandInputMessage::Error("sidecar_spawn_failed"));
+                let _ = done_tx.send(());
+                return;
+            }
+        };
+
+        let Some(stdout) = child.stdout.take() else {
+            bus.publish(HandInputMessage::Error("sidecar_stdout_failed"));
+            let _ = child.kill();
+            let _ = done_tx.send(());
+            return;
+        };
+
+        let child = Arc::new(Mutex::new(child));
+        self.child = Some(Arc::clone(&child));
+        self.handle = Some(thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                let Ok(line) = line else {
+                    bus.publish(HandInputMessage::Error("sidecar_read_failed"));
+                    break;
+                };
+                match parse_sidecar_line(&line, Instant::now()) {
+                    Ok(SidecarProtocolMessage::Ignored) => {}
+                    Ok(SidecarProtocolMessage::Input(message)) => bus.publish(message),
+                    Ok(SidecarProtocolMessage::Preview(frame)) => preview_bus.publish(frame),
+                    Err(err) => bus.publish(HandInputMessage::Error(err.code())),
+                }
+            }
+            if !shutdown.load(Ordering::Relaxed) {
+                bus.publish(HandInputMessage::Error("sidecar_exit"));
+            }
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = done_tx.send(());
+        }));
+    }
+
     fn start_apple_vision_reader(
         &mut self,
         done_tx: mpsc::Sender<()>,
@@ -266,6 +345,59 @@ impl HandRuntime {
             let _ = done_tx.send(());
         }));
     }
+}
+
+#[cfg(feature = "hands")]
+fn find_hand_sidecar_command(configured_command: Option<&str>) -> Option<String> {
+    if let Some(command) = configured_command {
+        if !command.trim().is_empty() {
+            return Some(command.to_string());
+        }
+    }
+
+    for var in ["TORTUISE_HAND_SIDECAR", "TORTUISE_HANDS_SIDECAR"] {
+        if let Ok(command) = std::env::var(var) {
+            if !command.trim().is_empty() {
+                return Some(command);
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("tortuise-hand-sidecar");
+            if candidate.exists() {
+                return Some(shell_quote_path(&candidate));
+            }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let candidate = PathBuf::from(home)
+            .join(".cargo")
+            .join("bin")
+            .join("tortuise-hand-sidecar");
+        if candidate.exists() {
+            return Some(shell_quote_path(&candidate));
+        }
+    }
+
+    for profile in ["release", "debug"] {
+        let candidate = PathBuf::from("target")
+            .join(profile)
+            .join("tortuise-hand-sidecar");
+        if candidate.exists() {
+            return Some(shell_quote_path(&candidate));
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "hands")]
+fn shell_quote_path(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy();
+    format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
 fn synthetic_preview_frame(captured_at: Instant) -> CameraPreviewFrame {
@@ -365,6 +497,8 @@ fn parse_apple_vision_line(line: &str, captured_at: Instant) -> Option<HandInput
             y: y.clamp(0.0, 1.0),
             pinch: pinch.clamp(0.0, 1.0),
             confidence: confidence.clamp(0.0, 1.0),
+            handedness: None,
+            landmarks: None,
         });
     }
 
@@ -422,6 +556,7 @@ mod tests {
             target_fps: 60,
             timeout_ms: 200,
             sensitivity: 1.0,
+            sidecar_command: None,
             camera_preview: false,
             camera_preview_scale: 0.15,
             camera_preview_fps: 8,

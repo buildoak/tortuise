@@ -41,6 +41,7 @@ pub struct HandConfig {
     pub target_fps: u32,
     pub timeout_ms: u64,
     pub sensitivity: f32,
+    pub sidecar_command: Option<String>,
     pub camera_preview: bool,
     pub camera_preview_scale: f32,
     pub camera_preview_fps: u32,
@@ -55,6 +56,7 @@ impl HandConfig {
             target_fps: 30,
             timeout_ms: 200,
             sensitivity: 1.0,
+            sidecar_command: None,
             camera_preview: false,
             camera_preview_scale: 0.15,
             camera_preview_fps: 8,
@@ -68,18 +70,24 @@ impl HandConfig {
         target_fps: Option<u32>,
         timeout_ms: Option<u64>,
         sensitivity: Option<f32>,
+        sidecar_raw: Option<&str>,
         camera_preview: bool,
         camera_preview_scale: Option<f32>,
         camera_preview_fps: Option<u32>,
     ) -> AppResult<Self> {
-        let mut backend = backend_raw
-            .map(HandBackend::parse)
-            .transpose()?
-            .unwrap_or(if hands {
+        let sidecar_command = sidecar_raw
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(str::to_string);
+        let mut backend = backend_raw.map(HandBackend::parse).transpose()?.unwrap_or(
+            if sidecar_command.is_some() {
+                HandBackend::Sidecar
+            } else if hands {
                 HandBackend::Replay
             } else {
                 HandBackend::Off
-            });
+            },
+        );
         let target_fps = target_fps.unwrap_or(30);
         if !(1..=60).contains(&target_fps) {
             return Err("--hand-target-fps must be in 1..=60".into());
@@ -114,6 +122,7 @@ impl HandConfig {
             target_fps,
             timeout_ms,
             sensitivity,
+            sidecar_command,
             camera_preview,
             camera_preview_scale,
             camera_preview_fps,
@@ -128,7 +137,8 @@ mod tests {
     #[test]
     fn config_defaults_to_replay_when_hands_enabled() {
         let config =
-            HandConfig::from_parts(true, None, true, None, None, None, false, None, None).unwrap();
+            HandConfig::from_parts(true, None, true, None, None, None, None, false, None, None)
+                .unwrap();
         assert!(config.enabled);
         assert_eq!(config.backend, HandBackend::Replay);
         assert_eq!(config.target_fps, 30);
@@ -137,14 +147,32 @@ mod tests {
 
     #[test]
     fn config_rejects_invalid_ranges() {
-        assert!(
-            HandConfig::from_parts(true, None, false, Some(0), None, None, false, None, None)
-                .is_err()
-        );
-        assert!(
-            HandConfig::from_parts(true, None, false, None, Some(5), None, false, None, None)
-                .is_err()
-        );
+        assert!(HandConfig::from_parts(
+            true,
+            None,
+            false,
+            Some(0),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None
+        )
+        .is_err());
+        assert!(HandConfig::from_parts(
+            true,
+            None,
+            false,
+            None,
+            Some(5),
+            None,
+            None,
+            false,
+            None,
+            None
+        )
+        .is_err());
         assert!(HandConfig::from_parts(
             true,
             None,
@@ -152,14 +180,47 @@ mod tests {
             None,
             None,
             Some(-1.0),
+            None,
             false,
             None,
             None
         )
         .is_err());
-        assert!(
-            HandConfig::from_parts(true, None, false, None, None, None, true, Some(0.8), None)
-                .is_err()
+        assert!(HandConfig::from_parts(
+            true,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some(0.8),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn sidecar_command_selects_sidecar_backend() {
+        let config = HandConfig::from_parts(
+            false,
+            None,
+            false,
+            None,
+            None,
+            None,
+            Some("/tmp/tortuise-hands-sidecar"),
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.backend, HandBackend::Sidecar);
+        assert_eq!(
+            config.sidecar_command.as_deref(),
+            Some("/tmp/tortuise-hands-sidecar")
         );
     }
 }

@@ -2,6 +2,19 @@ use std::time::Instant;
 
 use super::{config::HandBackend, controller::GestureController, HandConfig};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handedness {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HandLandmark {
+    pub x: f32,
+    pub y: f32,
+    pub z: Option<f32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackedHand {
     #[allow(dead_code)]
@@ -10,6 +23,8 @@ pub struct TrackedHand {
     pub y: f32,
     pub pinch: f32,
     pub confidence: f32,
+    pub handedness: Option<Handedness>,
+    pub landmarks: Option<[HandLandmark; 21]>,
 }
 
 #[derive(Debug, Clone)]

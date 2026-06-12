@@ -25,6 +25,8 @@ impl ReplayHandSource {
                 y: 0.5 + 0.18 * (t * 0.7).cos(),
                 pinch: 0.82,
                 confidence: 0.95,
+                handedness: None,
+                landmarks: None,
             }],
         }
     }

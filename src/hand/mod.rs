@@ -3,6 +3,8 @@
 pub mod bus;
 pub mod config;
 pub mod controller;
+#[cfg(feature = "hands")]
+pub mod protocol;
 pub mod replay;
 pub mod runtime;
 pub mod types;
