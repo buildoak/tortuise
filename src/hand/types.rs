@@ -23,7 +23,9 @@ pub struct TrackedHand {
     pub y: f32,
     pub pinch: f32,
     pub confidence: f32,
+    #[allow(dead_code)]
     pub handedness: Option<Handedness>,
+    #[allow(dead_code)]
     pub landmarks: Option<[HandLandmark; 21]>,
 }
 
