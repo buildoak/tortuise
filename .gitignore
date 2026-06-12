@@ -1,5 +1,7 @@
 /target
 _workbench/
+.mediapipe-sidecar/
+models/
 
 # Scene files (large) — only allow explicitly committed ones in scenes/
 *.ply
@@ -15,3 +17,5 @@ random/
 .vscode/
 .idea/
 *.swp
+__pycache__/
+*.pyc
