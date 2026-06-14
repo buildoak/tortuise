@@ -13,6 +13,7 @@ import base64
 import json
 import math
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,12 @@ PINCH_ENTER_NORMALIZED = 0.55
 PINCH_EXIT_NORMALIZED = 0.70
 CONTROLLER_ENTER_SCORE = 0.72
 CONTROLLER_EXIT_SCORE = 0.58
+STOP_REQUESTED = False
+
+
+def request_stop(_signum: int, _frame: Any) -> None:
+    global STOP_REQUESTED
+    STOP_REQUESTED = True
 
 
 def log(message: str) -> None:
@@ -245,6 +252,9 @@ def open_camera(cv2: Any, camera_index: int) -> Any:
 
 
 def run_capture(args: argparse.Namespace) -> int:
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+
     model = Path(args.model)
     if not model.is_file():
         emit("error", code="model_missing", model=str(model))
@@ -292,6 +302,9 @@ def run_capture(args: argparse.Namespace) -> int:
         with vision.HandLandmarker.create_from_options(options) as landmarker:
             emit("status", status="ready")
             while True:
+                if STOP_REQUESTED:
+                    emit("status", status="stopping", frames=emitted)
+                    break
                 if args.probe_camera and emitted >= args.frames:
                     break
 
@@ -358,9 +371,6 @@ def run_capture(args: argparse.Namespace) -> int:
                             args.mirror,
                         ),
                     )
-    except KeyboardInterrupt:
-        emit("status", status="interrupted")
-        return 130
     finally:
         capture.release()
 

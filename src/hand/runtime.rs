@@ -109,7 +109,7 @@ impl HandRuntime {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(child) = self.child.as_ref() {
             if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
+                terminate_child(&mut child, false);
             }
         }
     }
@@ -121,6 +121,13 @@ impl HandRuntime {
             .as_ref()
             .map(|rx| rx.recv_timeout(deadline).is_ok())
             .unwrap_or(true);
+        if !done {
+            if let Some(child) = self.child.as_ref() {
+                if let Ok(mut child) = child.lock() {
+                    terminate_child(&mut child, true);
+                }
+            }
+        }
         if done {
             if let Some(handle) = self.handle.take() {
                 let _ = handle.join();
@@ -192,6 +199,26 @@ impl HandRuntime {
             done_rx: Some(done_rx),
             child: None,
         }
+    }
+}
+
+fn terminate_child(child: &mut Child, force: bool) {
+    if force {
+        let _ = child.kill();
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(child.id().to_string())
+            .status();
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
     }
 }
 
