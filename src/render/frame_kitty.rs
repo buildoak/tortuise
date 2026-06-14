@@ -510,9 +510,13 @@ fn draw_kitty_camera_preview(
         for px in 1..preview_w.saturating_sub(1) {
             let sx = px * frame.width / preview_w;
             let mut color = camera_preview_sample(frame, sx, sy);
-            if let Some(marker) =
-                camera_preview_marker(app_state, frame.width, frame.height, sx, sy)
-            {
+            if let Some(marker) = super::camera_preview::hand_overlay_rgb(
+                &app_state.hand_control.latest_hands,
+                frame.width,
+                frame.height,
+                sx,
+                sy,
+            ) {
                 color = marker;
             }
             put_payload_pixel(
@@ -542,35 +546,6 @@ fn camera_preview_sample(
         *frame.rgb.get(idx + 1).unwrap_or(&0),
         *frame.rgb.get(idx + 2).unwrap_or(&0),
     ]
-}
-
-#[cfg(all(feature = "metal", feature = "hands"))]
-fn camera_preview_marker(
-    app_state: &AppState,
-    frame_width: usize,
-    frame_height: usize,
-    x: usize,
-    y: usize,
-) -> Option<[u8; 3]> {
-    let radius = (frame_width.max(frame_height) as f32 / 24.0).max(2.0);
-    let radius_sq = radius * radius;
-    for hand in &app_state.hand_control.latest_hands {
-        if hand.confidence < 0.25 {
-            continue;
-        }
-        let hx = hand.x.clamp(0.0, 1.0) * frame_width.saturating_sub(1) as f32;
-        let hy = (1.0 - hand.y.clamp(0.0, 1.0)) * frame_height.saturating_sub(1) as f32;
-        let dx = x as f32 - hx;
-        let dy = y as f32 - hy;
-        if dx * dx + dy * dy <= radius_sq {
-            return Some(if hand.pinch >= 0.72 {
-                [80, 255, 140]
-            } else {
-                [70, 190, 255]
-            });
-        }
-    }
-    None
 }
 
 fn validate_rgba_dimensions(width: usize, height: usize, rgba: &[u8]) -> io::Result<usize> {

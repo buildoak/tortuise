@@ -6,6 +6,30 @@ use std::io::{self, Write};
 
 use super::{make_color, AppState, HALF_BLOCK};
 
+const HAND_BONES: &[(usize, usize)] = &[
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),
+    (0, 5),
+    (5, 6),
+    (6, 7),
+    (7, 8),
+    (5, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),
+    (9, 13),
+    (13, 14),
+    (14, 15),
+    (15, 16),
+    (13, 17),
+    (17, 18),
+    (18, 19),
+    (19, 20),
+    (0, 17),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PreviewRect {
     x: u16,
@@ -45,32 +69,86 @@ fn sample_rgb(frame: &crate::hand::types::CameraPreviewFrame, x: usize, y: usize
     ]
 }
 
-fn marker_rgb(
-    app_state: &AppState,
+pub(super) fn hand_overlay_rgb(
+    hands: &[crate::hand::types::TrackedHand],
     frame_width: usize,
     frame_height: usize,
     x: usize,
     y: usize,
 ) -> Option<[u8; 3]> {
-    let radius = (frame_width.max(frame_height) as f32 / 24.0).max(2.0);
-    let radius_sq = radius * radius;
-    for hand in &app_state.hand_control.latest_hands {
+    let max_dim = frame_width.max(frame_height) as f32;
+    let joint_radius = (max_dim / 80.0).max(1.1);
+    let joint_radius_sq = joint_radius * joint_radius;
+    let line_radius = (max_dim / 130.0).max(0.8);
+    let line_radius_sq = line_radius * line_radius;
+
+    for hand in hands {
         if hand.confidence < 0.25 {
             continue;
         }
-        let hx = hand.x.clamp(0.0, 1.0) * frame_width.saturating_sub(1) as f32;
-        let hy = (1.0 - hand.y.clamp(0.0, 1.0)) * frame_height.saturating_sub(1) as f32;
-        let dx = x as f32 - hx;
-        let dy = y as f32 - hy;
-        if dx * dx + dy * dy <= radius_sq {
-            return Some(if hand.pinch >= 0.72 {
-                [80, 255, 140]
-            } else {
-                [70, 190, 255]
-            });
+        let active = hand.pinch >= 0.72;
+        let joint_color = if active {
+            [80, 255, 140]
+        } else {
+            [70, 190, 255]
+        };
+        let bone_color = if active {
+            [70, 230, 150]
+        } else {
+            [90, 220, 255]
+        };
+
+        if let Some(landmarks) = hand.landmarks.as_ref() {
+            for &(a, b) in HAND_BONES {
+                let pa = landmark_pixel(&landmarks[a], frame_width, frame_height);
+                let pb = landmark_pixel(&landmarks[b], frame_width, frame_height);
+                if segment_distance_sq((x as f32, y as f32), pa, pb) <= line_radius_sq {
+                    return Some(bone_color);
+                }
+            }
+            for landmark in landmarks {
+                let point = landmark_pixel(landmark, frame_width, frame_height);
+                if point_distance_sq((x as f32, y as f32), point) <= joint_radius_sq {
+                    return Some(joint_color);
+                }
+            }
+        } else {
+            let hx = hand.x.clamp(0.0, 1.0) * frame_width.saturating_sub(1) as f32;
+            let hy = hand.y.clamp(0.0, 1.0) * frame_height.saturating_sub(1) as f32;
+            if point_distance_sq((x as f32, y as f32), (hx, hy)) <= joint_radius_sq {
+                return Some(joint_color);
+            }
         }
     }
     None
+}
+
+fn landmark_pixel(
+    landmark: &crate::hand::types::HandLandmark,
+    frame_width: usize,
+    frame_height: usize,
+) -> (f32, f32) {
+    (
+        landmark.x.clamp(0.0, 1.0) * frame_width.saturating_sub(1) as f32,
+        landmark.y.clamp(0.0, 1.0) * frame_height.saturating_sub(1) as f32,
+    )
+}
+
+fn point_distance_sq(point: (f32, f32), target: (f32, f32)) -> f32 {
+    let dx = point.0 - target.0;
+    let dy = point.1 - target.1;
+    dx * dx + dy * dy
+}
+
+fn segment_distance_sq(point: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let ab = (b.0 - a.0, b.1 - a.1);
+    let ap = (point.0 - a.0, point.1 - a.1);
+    let len_sq = ab.0 * ab.0 + ab.1 * ab.1;
+    if len_sq <= f32::EPSILON {
+        return point_distance_sq(point, a);
+    }
+    let t = ((ap.0 * ab.0 + ap.1 * ab.1) / len_sq).clamp(0.0, 1.0);
+    point_distance_sq(point, (a.0 + ab.0 * t, a.1 + ab.1 * t))
 }
 
 fn preview_pixel_rgb(
@@ -79,8 +157,14 @@ fn preview_pixel_rgb(
     x: usize,
     y: usize,
 ) -> [u8; 3] {
-    marker_rgb(app_state, frame.width, frame.height, x, y)
-        .unwrap_or_else(|| sample_rgb(frame, x, y))
+    hand_overlay_rgb(
+        &app_state.hand_control.latest_hands,
+        frame.width,
+        frame.height,
+        x,
+        y,
+    )
+    .unwrap_or_else(|| sample_rgb(frame, x, y))
 }
 
 pub fn draw_camera_preview(

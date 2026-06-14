@@ -26,6 +26,10 @@ THUMB_TIP = 4
 INDEX_TIP = 8
 INDEX_MCP = 5
 PINKY_MCP = 17
+PINCH_ENTER_NORMALIZED = 0.55
+PINCH_EXIT_NORMALIZED = 0.70
+CONTROLLER_ENTER_SCORE = 0.72
+CONTROLLER_EXIT_SCORE = 0.58
 
 
 def log(message: str) -> None:
@@ -126,10 +130,19 @@ def pinch_score(landmarks: list[Any]) -> float:
     pinch_distance = distance_2d(landmarks[THUMB_TIP], landmarks[INDEX_TIP])
     if len(landmarks) > PINKY_MCP:
         # Match the browser prototype: thumb-tip/index-tip distance normalized
-        # by palm width, then converted to a high-is-pinched score.
+        # by palm width. The Rust controller expects high-is-pinched scores
+        # with enter/exit hysteresis at 0.72/0.58, so map the browser's
+        # normalized pinch thresholds onto that score space.
         palm_distance = max(0.04, distance_2d(landmarks[INDEX_MCP], landmarks[PINKY_MCP]))
         normalized = pinch_distance / palm_distance
-        return clamp(1.0 - normalized / 0.55, 0.0, 1.0)
+        slope = (CONTROLLER_ENTER_SCORE - CONTROLLER_EXIT_SCORE) / (
+            PINCH_EXIT_NORMALIZED - PINCH_ENTER_NORMALIZED
+        )
+        return clamp(
+            CONTROLLER_ENTER_SCORE + (PINCH_ENTER_NORMALIZED - normalized) * slope,
+            0.0,
+            1.0,
+        )
     return clamp(1.0 - pinch_distance / 0.18, 0.0, 1.0)
 
 
@@ -216,7 +229,9 @@ def result_payload(result: Any, mirror: bool) -> list[dict[str, Any]]:
     return hands
 
 
-def preview_payload(cv2: Any, rgb_frame: Any, width: int, height: int) -> str:
+def preview_payload(cv2: Any, rgb_frame: Any, width: int, height: int, mirror: bool) -> str:
+    if mirror:
+        rgb_frame = cv2.flip(rgb_frame, 1)
     resized = cv2.resize(rgb_frame, (width, height), interpolation=cv2.INTER_AREA)
     return base64.b64encode(resized.tobytes()).decode("ascii")
 
@@ -335,7 +350,13 @@ def run_capture(args: argparse.Namespace) -> int:
                         height=args.preview_height,
                         format="rgb24",
                         encoding="base64",
-                        data=preview_payload(cv2, rgb_frame, args.preview_width, args.preview_height),
+                        data=preview_payload(
+                            cv2,
+                            rgb_frame,
+                            args.preview_width,
+                            args.preview_height,
+                            args.mirror,
+                        ),
                     )
     except KeyboardInterrupt:
         emit("status", status="interrupted")
